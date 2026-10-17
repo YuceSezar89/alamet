@@ -91,37 +91,38 @@ class SignalPanel:  # pylint: disable=too-many-instance-attributes
     shadow_last: dict | None = None
 
 
-def _pad_front(array: np.ndarray, rows: int) -> np.ndarray:
-    if rows == 0:
-        return array
-    return np.concatenate([np.full((rows,) + array.shape[1:], np.nan), array])
+def _expand(array: np.ndarray, rows: np.ndarray, total: int) -> np.ndarray:
+    """Geçerli satırlardaki hesabı tüm eksene yayar: sembolün ilk barından önce `NaN`, ilk
+    barından sonra veri olmayan satırlarda son geçerli değer taşınır (TradingView `gaps_off`)."""
+    last = np.searchsorted(rows, np.arange(total), side="right") - 1
+    return np.where(last >= 0, array[np.maximum(last, 0)], np.nan)
 
 
 def _one_symbol(universe: Universe, k: int, params: SymbolParams, open_hour: int):
-    """Tek sembolün gösterge zinciri. Henüz işlem görmeyen başlangıç barları (kapanış `NaN`)
-    atlanır ve sonuç başa `NaN` olarak eklenir: sembolün kendi serisi ilk barından başlar
-    (TradingView'da `request.security` o sembolde olmayan geçmişi görmez)."""
+    """Tek sembolün gösterge zinciri. Sembolün olmadığı barlar (kapanış `NaN`: henüz
+    listelenmemiş ya da veri boşluğu) hesaba hiç girmez; sembol kendi serisinde bar eksikmiş gibi
+    devam eder, çünkü TradingView'da `request.security` o sembolün var olan barlarını görür."""
     o, h, l, c = (getattr(universe, f)[:, k] for f in ("open", "high", "low", "close"))
-    valid = ~np.isnan(c)
-    first = int(np.argmax(valid)) if valid.any() else len(c)
-    if first == len(c):
-        empty = np.full(len(c), np.nan)
+    rows = np.flatnonzero(~np.isnan(c))
+    total = len(c)
+    if len(rows) == 0:
+        empty = np.full(total, np.nan)
         blank = GateResult(empty, empty, empty, empty, empty)
         return (blank,) * 4, empty, empty, empty, empty, empty
-    o, h, l, c = o[first:], h[first:], l[first:], c[first:]
-    time = universe.time[first:]
-    result = symbol_signals(o, h, l, c, universe.volume[first:, k], time, params)
+    o, h, l, c = o[rows], h[rows], l[rows], c[rows]
+    time = universe.time[rows]
+    result = symbol_signals(o, h, l, c, universe.volume[rows, k], time, params)
     methods = tuple(
-        GateResult(*(_pad_front(getattr(g, f.name), first) for f in fields(GateResult)))
+        GateResult(*(_expand(getattr(g, f.name), rows, total) for f in fields(GateResult)))
         for g in result.methods
     )
     return (
         methods,
-        _pad_front(result.mtf.final_pct, first),
-        _pad_front(pine_atr(h, l, c, params.atr_len), first),
-        _pad_front(daily_open(time, o, open_hour), first),
-        _pad_front(period_levels(o, h, l, c, period_ids(time, "W")).open, first),
-        _pad_front(period_levels(o, h, l, c, period_ids(time, "M")).open, first),
+        _expand(result.mtf.final_pct, rows, total),
+        _expand(pine_atr(h, l, c, params.atr_len), rows, total),
+        _expand(daily_open(time, o, open_hour), rows, total),
+        _expand(period_levels(o, h, l, c, period_ids(time, "W")).open, rows, total),
+        _expand(period_levels(o, h, l, c, period_ids(time, "M")).open, rows, total),
     )
 
 

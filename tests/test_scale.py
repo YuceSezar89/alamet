@@ -140,3 +140,32 @@ def test_a_late_listed_symbols_series_starts_at_its_own_first_bar():
         ), name
     assert np.isnan(wide.atr[:first_bar, late:]).all()
     assert np.isfinite(wide.atr[first_bar + 50 :, late:]).all()
+
+
+def with_gap(data, symbol, start, stop):
+    close, high, low, open_, volume = (
+        a.copy() for a in (data.close, data.high, data.low, data.open, data.volume)
+    )
+    for array in (close, high, low, open_, volume):
+        array[start:stop, symbol] = np.nan
+    return Universe(data.symbols, data.time, open_, high, low, close, volume)
+
+
+def test_a_data_gap_inside_a_symbols_history_does_not_kill_its_indicators():
+    data = market(24, bars=1400)
+    gap = with_gap(data, 0, 500, 530)
+    params = panel_params(n_top=4, max_slots=3)
+    panel = build_panel(gap, params, True)
+    assert np.isfinite(panel.atr[540:, 0]).all()
+    assert np.isnan(gap.close[500:530, 0]).all()
+    assert np.array_equal(panel.atr[500:530, 0], np.full(30, panel.atr[499, 0]))
+    keep = np.r_[0:500, 530:1400]
+    compact = Universe(
+        data.symbols, data.time[keep], gap.open[keep], gap.high[keep], gap.low[keep],
+        gap.close[keep], gap.volume[keep],
+    )  # fmt: skip
+    reference = build_panel(compact, params, True)
+    for name in ("types", "starts", "strengths", "methods", "pcts", "base_scores", "atr", "power"):
+        assert np.array_equal(
+            getattr(panel, name)[keep, 0], getattr(reference, name)[:, 0], equal_nan=True
+        ), name
