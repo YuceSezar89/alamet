@@ -26,6 +26,7 @@ from alamet.binance_data import DEFAULT_ROOT, infer_tf, load_universe_binance
 from alamet.daily import daily_from_bars, daily_pack, day_inputs, map_to_bars, window_daily
 from alamet.entry_quality import LABELS
 from alamet.kelly import KellyEngine
+from alamet.own_divergence import MODE_SIGMA
 from alamet.stages import stage_params, with_signal_tf
 from alamet.system import run_system
 
@@ -37,6 +38,7 @@ VARIANTS = {
     "maxExt 8": {"max_ext": 8.0},
     "zMin 0,5": {"z_min": 0.5},
     "nTop 3": {"n_top": 3},
+    "ownMode Ort+σ": {"own_mode": MODE_SIGMA},
 }
 _STATE: dict = {}
 _COUNT: collections.Counter = collections.Counter()
@@ -120,6 +122,8 @@ def run_one(job: tuple) -> dict:
         trade = replace(trade, quality=replace(trade.quality, max_ext=mods["max_ext"]))
     if "z_min" in mods:
         panel = replace(panel, divergence=replace(panel.divergence, z_min=mods["z_min"]))
+    if "own_mode" in mods:
+        panel = replace(panel, own_mode=mods["own_mode"])
     if "n_top" in mods:
         panel = replace(panel, n_top=mods["n_top"])
     pack = daily_pack(daily, panel.dr_rsi_len, panel.dr_look)
@@ -129,6 +133,8 @@ def run_one(job: tuple) -> dict:
     moves = np.array([t.side * t.signal_pct for t in trades]) if trades else np.array([np.nan])
     elig = np.asarray(result.panel.divergence["eligible"])[-BARS:]
     busy = (np.asarray(result.sides)[-BARS:] != 0).any(axis=1)
+    signal = np.nan_to_num(np.asarray(result.panel.types)[-BARS:]) != 0
+    own_ok = np.asarray(result.panel.own_ok)[-BARS:].astype(bool) & signal
     tries = max(_COUNT["deneme"], 1)
     return {
         "ayar": name, "pencere": window, "işlem": len(trades),
@@ -137,6 +143,7 @@ def run_one(job: tuple) -> dict:
         "giriş_hareket_p75": float(np.nanpercentile(moves, 75)),
         "meşguliyet": float(busy.mean() * 100),
         "uygun_bar_başı": float(elig.sum(axis=1).mean()),
+        "kendi_içi_geçen": float(own_ok.sum() / max(signal.sum(), 1) * 100),
         "deneme": _COUNT["deneme"], "uzama_oranı": _COUNT["uzama"] / tries * 100,
         "açıldı_oranı": _COUNT["açıldı"] / tries * 100,
     }  # fmt: skip
@@ -147,6 +154,7 @@ METRICS = [
     ("giriş_hareket_medyan", "Girişte sinyalden beri hareket, medyan %", 2),
     ("giriş_hareket_p75", "… %75'lik %", 2),
     ("meşguliyet", "Kasa meşguliyeti % (≥1 açık)", 1),
+    ("kendi_içi_geçen", "Kendi içi kapıyı geçen % (sinyalli semboller içinde)", 1),
     ("uygun_bar_başı", "Uygun aday / bar", 2),
     ("uzama_oranı", "Girişi uzama filtresine takılan %", 1),
     ("açıldı_oranı", "Denemelerden açılan %", 1),
