@@ -106,3 +106,36 @@ def test_universe_empty_cache_errors(tmp_path):
 
 def test_to_ms_is_utc():
     assert bd.to_ms("2026-03-01") == 1772323200000
+
+
+def late_frame(start_index, total):
+    base = 100.0 + np.arange(start_index, total, dtype=float)
+    return pd.DataFrame(
+        {
+            "open_time": (T0 + np.arange(start_index, total) * bd.BAR_MS).astype("int64"),
+            "open": base,
+            "high": base + 1,
+            "low": base - 1,
+            "close": base + 0.5,
+            "volume": np.full(total - start_index, 10.0),
+            "quote_volume": base * 10,
+        }
+    )
+
+
+def test_union_universe_keeps_late_listed_symbols_as_nan_instead_of_shrinking_the_axis(tmp_path):
+    bd.save_cache(tmp_path, "BTC", late_frame(0, 40))
+    bd.save_cache(tmp_path, "NEW", late_frame(10, 40))
+    narrow = bd.load_universe_binance(tmp_path, ("BTC", "NEW"))
+    wide = bd.load_universe_binance(tmp_path, ("BTC", "NEW"), union=True)
+    assert narrow.bars == 30 and wide.bars == 40
+    assert np.isnan(wide.close[:10, 1]).all() and not np.isnan(wide.close[10:, 1]).any()
+    assert np.isnan(wide.volume[:10, 1]).all() and not np.isnan(wide.close[:, 0]).any()
+    assert np.array_equal(wide.close[10:, 1], narrow.close[:, 1])
+
+
+def test_union_universe_still_rejects_axis_gaps(tmp_path):
+    bd.save_cache(tmp_path, "BTC", late_frame(0, 20).drop(index=5).reset_index(drop=True))
+    bd.save_cache(tmp_path, "NEW", late_frame(0, 20).drop(index=5).reset_index(drop=True))
+    with pytest.raises(ValueError, match="eksik bar"):
+        bd.load_universe_binance(tmp_path, ("BTC", "NEW"), union=True)

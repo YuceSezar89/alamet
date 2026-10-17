@@ -87,3 +87,36 @@ def test_cross_sectional_ranking_does_depend_on_the_universe():
     assert big.rank.top.sum(axis=1).max() <= 2 * 4 and small.rank.top.sum(axis=1).max() <= 2 * 4
     in_wide = big.rank.top[:, :narrow_n].sum()
     assert in_wide < small.rank.top.sum()
+
+
+def listed_late(n, late, first_bar, bars=1500, seed=5):
+    base = market(n, bars, seed)
+    close, high, low, open_, volume = (
+        a.copy() for a in (base.close, base.high, base.low, base.open, base.volume)
+    )
+    for array in (close, high, low, open_, volume):
+        array[:first_bar, late:] = np.nan
+    return Universe(base.symbols, base.time, open_, high, low, close, volume)
+
+
+def test_symbols_listed_later_stay_nan_and_never_trade_before_their_listing():
+    n, late, first_bar = 60, 30, 700
+    data = listed_late(n, late, first_bar)
+    trade = TradeParams(
+        max_slots=4, use_dyn=True, kelly=KellyParams(on=True), pool=PoolParams(on=True), dr_on=True
+    )
+    result = run_system(
+        data, panel_params(n_top=8, max_slots=4), trade, True, collect_stats=True,
+        collect_events=True,
+    )  # fmt: skip
+    assert (result.sides[:first_bar, late:] == 0).all()
+    assert (result.notionals[:first_bar, late:] == 0).all()
+    assert all(
+        t.open_bar >= first_bar for t in result.trades if t.symbol >= late
+    ), "listelenmeden önce işlem açıldı"
+    opened = {t.symbol for t in result.trades}
+    assert opened & set(range(late)) and np.isfinite(result.realised).all()
+    types = result.panel.types
+    assert (np.nan_to_num(types[:first_bar, late:]) == 0).all()
+    ranks = result.panel.rank.top[:first_bar, late:]
+    assert not ranks.any()

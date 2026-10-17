@@ -189,8 +189,14 @@ def load_universe_binance(
     end_ms: int | None = None,
     allow_gaps: bool = False,
     tf: SignalTf = DEFAULT_TF,
+    union: bool = False,
 ) -> Universe:
-    """Önbellekten ortak zaman eksenli Universe üretir (zaman: UTC saniye)."""
+    """Önbellekten ortak zaman eksenli Universe üretir (zaman: UTC saniye).
+
+    Varsayılan: yalnızca bütün sembollerin ortak zamanları (en yeni sembol başlangıcı belirler).
+    `union=True`: bütün sembollerin zamanlarının birleşimi; bir sembolün işlem görmediği barlar
+    (henüz listelenmemiş, durdurulmuş) `NaN` olur. Sistem `NaN` fiyatlı sembole işlem açmaz.
+    """
     frames = {}
     for base in symbols:
         df = load_cache(root, base)
@@ -199,7 +205,7 @@ def load_universe_binance(
         frames[base] = df.set_index("open_time")
     common = frames[symbols[0]].index
     for base in symbols[1:]:
-        common = common.intersection(frames[base].index)
+        common = (common.union if union else common.intersection)(frames[base].index)
     if start_ms is not None:
         common = common[common >= start_ms]
     if end_ms is not None:
@@ -212,7 +218,7 @@ def load_universe_binance(
         missing = int(((steps[steps > tf.millis] // tf.millis) - 1).sum())
         raise ValueError(f"Ortak eksende {missing} eksik bar var (allow_gaps=True ile geçilebilir)")
     stacked = {
-        key: np.column_stack([frames[b].loc[common, key].to_numpy(float) for b in symbols])
+        key: np.column_stack([frames[b][key].reindex(common).to_numpy(float) for b in symbols])
         for key in ("open", "high", "low", "close", "volume")
     }
     return Universe(symbols, (common.to_numpy(np.int64) // 1000), **stacked)
