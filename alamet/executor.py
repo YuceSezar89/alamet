@@ -166,12 +166,18 @@ class Executor:
             if (reason := self._blocked(row)) is not None:
                 self._finish(row, "blocked", reason)
                 self.log(f"ENGELLENDİ {row['base']} {row['client_id']}: {reason}")
+            elif row["kind"] == "close" and not self._has_open_position(row["trade_id"]):
+                self._finish(row, "skipped", "açık_pozisyon_yok")
+                self.log(f"ATLANDI {row['base']} {row['client_id']}: bu işlemin açık pozisyonu yok")
             elif self.safety.dry_run:
                 self._dry(row)
             else:
                 await self._send(row)
             done += 1
         return done
+
+    def _has_open_position(self, trade_id: int) -> bool:
+        return trade_id in set(self.store.positions().trade_id)
 
     def _finish(self, row: dict, state: str, error: str | None = None) -> None:
         with self.store.conn:

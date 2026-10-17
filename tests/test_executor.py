@@ -249,3 +249,85 @@ def test_short_positions_reconcile_with_sign(store):
     assert store.orders().side[0] == "SELL"
     api.positions_value = {"BTCUSDT": -0.01}
     assert run(ex.reconcile()) == []
+
+
+def test_open_and_close_in_the_same_bar_run_in_order(store):
+    api = FakeApi()
+    ex = make(store, api)
+    queue(store, ex, [open_event(), close_event()])
+    run(ex.execute_pending())
+    assert [i.client_id for i in api.sent] == ["al1o", "al1c"]
+    assert store.positions().empty and store.outbox().state.tolist() == ["done", "done"]
+
+
+def test_close_is_skipped_when_its_open_was_blocked(store):
+    api = FakeApi()
+    ex = make(store, api)
+    ex.halt("deneme")
+    queue(store, ex, [open_event(), close_event()])
+    run(ex.execute_pending())
+    assert api.sent == []
+    assert store.outbox().state.tolist() == ["blocked", "skipped"]
+
+
+def test_close_is_skipped_when_its_open_failed(store):
+    api = FakeApi()
+    api.fail = ApiError(-2019, "Margin is insufficient.")
+    ex = make(store, api)
+    queue(store, ex, [open_event(), close_event()])
+    run(ex.execute_pending())
+    assert store.outbox().state.tolist() == ["failed", "skipped"]
+
+
+def test_unknown_exchange_position_in_universe_halts(store):
+    api = FakeApi()
+    api.positions_value = {"ETHUSDT": 1.0}
+    ex = make(store, api)
+    assert len(run(ex.reconcile())) == 1 and ex.halted()
+
+
+def test_hard_kill_between_commit_and_send_resends_once(tmp_path):
+    import subprocess
+    import sys
+    import textwrap
+
+    db = tmp_path / "k.sqlite"
+    child = textwrap.dedent(f"""
+        import os, sys
+        sys.path.insert(0, "tests")
+        from test_executor import *
+        s = Store({str(db)!r})
+        ex = make(s, FakeApi())
+        queue(s, ex, [open_event()])
+        os._exit(9)
+    """)
+    done = subprocess.run([sys.executable, "-c", child], check=False, capture_output=True)
+    assert done.returncode == 9, done.stderr
+    api = FakeApi()
+    with Store(db) as reopened:
+        ex = make(reopened, api)
+        assert len(reopened.pending_outbox()) == 1
+        run(ex.execute_pending())
+        run(ex.execute_pending())
+        assert len(api.sent) == 1 and len(reopened.positions()) == 1
+
+
+def test_hard_kill_after_send_before_record_does_not_double_send(tmp_path):
+    db = tmp_path / "k2.sqlite"
+    api = FakeApi()
+    with Store(db) as first:
+        ex = make(first, api)
+        queue(first, ex, [open_event()])
+        with first.conn:
+            first.mark_outbox(first.pending_outbox()[0]["id"], "pending", None, 1)
+        run(api.place_order(OrderIntentStub()))
+    with Store(db) as second:
+        ex = make(second, api)
+        run(ex.execute_pending())
+        assert len(api.sent) == 1 and len(second.positions()) == 1
+
+
+class OrderIntentStub:
+    client_id, symbol, side, quantity, ref_price, reduce_only = (
+        "al1o", "BTCUSDT", "BUY", 0.01, 80_000.0, False,
+    )  # fmt: skip
