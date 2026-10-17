@@ -304,7 +304,7 @@ class SymbolStream:
 
     def __init__(self, params: SymbolParams = SymbolParams()) -> None:
         self.p = params
-        self.bar = 0
+        self.index = 0
         self.ha = [HaScore() for _ in params.ha_multipliers]
         self.trend, self.momentum = Trend(params), Momentum(params)
         self.volatility, self.volume = Volatility(params), Volume(params)
@@ -328,10 +328,10 @@ class SymbolStream:
         )
         methods = tuple(
             gate.step(
-                self.bar, state == 1, state == -1, ok_long, ok_short, strength, strength, high, low
+                self.index, state == 1, state == -1, ok_long, ok_short, strength, strength, high, low
             )
             for gate, (state, strength) in zip(self.gates, raw)
         )
         atr = self.atr.update(high, low, close)
-        self.bar += 1
+        self.index += 1
         return SymbolStep(methods, final_pct, atr)
