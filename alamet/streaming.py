@@ -328,7 +328,15 @@ class SymbolStream:
         )
         methods = tuple(
             gate.step(
-                self.index, state == 1, state == -1, ok_long, ok_short, strength, strength, high, low
+                self.index,
+                state == 1,
+                state == -1,
+                ok_long,
+                ok_short,
+                strength,
+                strength,
+                high,
+                low,
             )
             for gate, (state, strength) in zip(self.gates, raw)
         )

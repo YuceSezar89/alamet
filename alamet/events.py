@@ -132,12 +132,20 @@ class EventLog:
 
     def __init__(self) -> None:
         self._items: list[Event] = []
+        self._next = 0
         self.times: np.ndarray | None = None
 
     def add(self, kind: type[Event], bar: int, phase: int, **fields) -> Event:
-        event = kind(bar=bar, phase=phase, seq=len(self._items), **fields)
+        event = kind(bar=bar, phase=phase, seq=self._next, **fields)
+        self._next += 1
         self._items.append(event)
         return event
+
+    def drain(self) -> list[Event]:
+        """Biriken olayları sırayla verir ve listeyi boşaltır (sıra sayacı sıfırlanmaz)."""
+        items = self.ordered()
+        self._items = []
+        return items
 
     def ordered(self) -> list[Event]:
         return sorted(self._items, key=lambda e: (e.bar, e.phase, e.seq))

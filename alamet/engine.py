@@ -176,6 +176,9 @@ class Trade:  # pylint: disable=too-many-instance-attributes
     mfe: float = 0.0
     hold: int = 0
     pnl: float = math.nan
+    signal_pct: float = 0.0
+    open_time: int = 0
+    close_time: int = 0
 
 
 @dataclass
@@ -589,6 +592,7 @@ class TradeEngine:  # pylint: disable=too-many-public-methods,too-many-instance-
         s.stay_used[k] = True
         trade = Trade(k, side, step_i, price, risk, notional, rank, div_n=div_n, kelly_ix=kelly_ix)
         trade.method, trade.strength, trade.op_side, trade.tier = meta
+        trade.signal_pct = signal_pct
         log = self.stats.log
         self.stats.id_seq += 1
         trade.trade_id = self.stats.id_seq

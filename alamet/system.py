@@ -53,7 +53,7 @@ def day_changes(time_s: np.ndarray, open_hour: int = 0) -> np.ndarray:
     return changed
 
 
-def _log_divergence(log: EventLog, bar: int, raw_events) -> None:
+def log_divergence(log: EventLog, bar: int, raw_events) -> None:
     """Takipçinin ham olaylarını (`ayrisma`, `cift_ayrisma`) tipli olaylara çevirir."""
     for kind, symbol, number, value in raw_events:
         if kind == "ayrisma":
@@ -148,7 +148,7 @@ def run_system(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
             top, active, cur_move = panel.rank.top[i], div["active"][i], div["cur_move"][i]
         if log is not None:
             stored = None if pooled else div.get("events")
-            _log_divergence(log, i, div_row.events if pooled else (stored[i] if stored else ()))
+            log_divergence(log, i, div_row.events if pooled else (stored[i] if stored else ()))
         inputs = BarInputs(
             universe.open[i], universe.high[i], universe.low[i], universe.close[i],
             panel.atr[i], panel.types[i], panel.starts[i], panel.power[i], panel.scores[i],
