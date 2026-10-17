@@ -6,8 +6,9 @@ import numpy as np
 import pytest
 
 from alamet.golden import load_window
+from alamet.levels import daily_open
 from alamet.primitives import pine_atr
-from alamet.streaming import SymbolStream
+from alamet.streaming import DailyOpen, SymbolStream
 from alamet.symbol import SymbolParams, symbol_signals
 
 GOLDEN = Path(__file__).parent / "data" / "golden" / "window.npz"
@@ -86,3 +87,12 @@ def test_stream_equals_batch_on_real_market_data_for_every_symbol():
             getattr(window, name)[:, k] for name in ("open", "high", "low", "close", "volume")
         ) + (window.time,)
         compare(series, SymbolParams())
+
+
+@pytest.mark.parametrize("hour", [0, 5, 21])
+def test_daily_open_stream_equals_batch(hour):
+    open_, _, _, _, _, time = random_series(2000, 3)
+    want = daily_open(time, open_, hour)
+    stream = DailyOpen(hour)
+    got = np.array([stream.update(int(time[i]), open_[i]) for i in range(len(time))])
+    assert np.array_equal(got, want, equal_nan=True)

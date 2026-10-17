@@ -264,6 +264,31 @@ def mtf_confirm_step(
     return weighted / total, True, True
 
 
+class DailyOpen:
+    """`levels.daily_open`: günün ilk barının açılışı (`hour_utc` ≠ 0 ise o saatte başlayan gün)."""
+
+    def __init__(self, hour_utc: int = 0) -> None:
+        self.hour_utc = hour_utc
+        self.current = NAN
+        self._prev_day: int | None = None
+        self._prev_hour: int | None = None
+
+    def update(self, time_s: int, open_: float) -> float:
+        day, hour = int(time_s) // 86400, (int(time_s) % 86400) // 3600
+        if self.hour_utc == 0:
+            new_day = self._prev_day is not None and day != self._prev_day
+        else:
+            new_day = (
+                self._prev_hour is not None
+                and hour == self.hour_utc
+                and self._prev_hour != self.hour_utc
+            )
+        if new_day or math.isnan(self.current):
+            self.current = open_
+        self._prev_day, self._prev_hour = day, hour
+        return self.current
+
+
 @dataclass(frozen=True)
 class SymbolStep:
     """Bir barın sonucu: 4 yöntemin kapı çıktısı (tip, başlangıç, güç, bekleyen, bar), HA onay
