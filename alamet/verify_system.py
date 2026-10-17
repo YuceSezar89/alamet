@@ -212,12 +212,13 @@ def _prepare(args: argparse.Namespace) -> Context:
     else:
         universe = load_universe(args.data1, args.data2)
     confirm_last = False
-    if csv_last > int(universe.time[-1]):
+    if csv_last >= int(universe.time[-1]):
         universe = universe.slice_to(universe.bars - 1)
         df = df[df["time"] <= universe.time[-1]].reset_index(drop=True)
         confirm_last = True
         print(
-            f"  not: debug CSV veriden yeni; canlı veri satırı atıldı, son bar {universe.time[-1]}"
+            "  not: TV'nin son satırı gerçek zamanlı (kapanmamış) mumdur; karşılaştırma dışı, "
+            f"son bar {universe.time[-1]}"
         )
     df = df.iloc[_first_valid(df, args.stage) :].reset_index(drop=True)
     rows = _rows(universe, df)

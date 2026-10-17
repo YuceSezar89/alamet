@@ -9,13 +9,14 @@ Kapanmamış son bar (`confirm_last=False`) durum ilerletmez, yalnızca değerle
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 import numpy as np
 
 from alamet.daily import DayInputs
 from alamet.devisso import LOOK, RSI_LEN
 from alamet.divergence import DivergenceParams, run_divergence
+from alamet.gate import GateResult
 from alamet.levels import daily_open, period_ids, period_levels
 from alamet.own_divergence import MODE_PREV, OwnDivergence
 from alamet.primitives import pine_atr
@@ -90,23 +91,54 @@ class SignalPanel:  # pylint: disable=too-many-instance-attributes
     shadow_last: dict | None = None
 
 
-def _symbol_arrays(  # pylint: disable=too-many-locals
-    universe: Universe, params: SymbolParams = SymbolParams(), open_hour: int = 0
-):
+def _pad_front(array: np.ndarray, rows: int) -> np.ndarray:
+    if rows == 0:
+        return array
+    return np.concatenate([np.full((rows,) + array.shape[1:], np.nan), array])
+
+
+def _one_symbol(universe: Universe, k: int, params: SymbolParams, open_hour: int):
+    """Tek sembolün gösterge zinciri. Henüz işlem görmeyen başlangıç barları (kapanış `NaN`)
+    atlanır ve sonuç başa `NaN` olarak eklenir: sembolün kendi serisi ilk barından başlar
+    (TradingView'da `request.security` o sembolde olmayan geçmişi görmez)."""
+    o, h, l, c = (getattr(universe, f)[:, k] for f in ("open", "high", "low", "close"))
+    valid = ~np.isnan(c)
+    first = int(np.argmax(valid)) if valid.any() else len(c)
+    if first == len(c):
+        empty = np.full(len(c), np.nan)
+        blank = GateResult(empty, empty, empty, empty, empty)
+        return (blank,) * 4, empty, empty, empty, empty, empty
+    o, h, l, c = o[first:], h[first:], l[first:], c[first:]
+    time = universe.time[first:]
+    result = symbol_signals(o, h, l, c, universe.volume[first:, k], time, params)
+    methods = tuple(
+        GateResult(*(_pad_front(getattr(g, f.name), first) for f in fields(GateResult)))
+        for g in result.methods
+    )
+    return (
+        methods,
+        _pad_front(result.mtf.final_pct, first),
+        _pad_front(pine_atr(h, l, c, params.atr_len), first),
+        _pad_front(daily_open(time, o, open_hour), first),
+        _pad_front(period_levels(o, h, l, c, period_ids(time, "W")).open, first),
+        _pad_front(period_levels(o, h, l, c, period_ids(time, "M")).open, first),
+    )
+
+
+def _symbol_arrays(universe: Universe, params: SymbolParams = SymbolParams(), open_hour: int = 0):
     gates, power, atr, d_open, w_open, m_open = [], [], [], [], [], []
     for k in range(universe.n):
-        o, h, l, c = (getattr(universe, f)[:, k] for f in ("open", "high", "low", "close"))
-        result = symbol_signals(o, h, l, c, universe.volume[:, k], universe.time, params)
-        gates.append(result.methods)
-        power.append(result.mtf.final_pct)
-        atr.append(pine_atr(h, l, c, params.atr_len))
-        d_open.append(daily_open(universe.time, o, open_hour))
-        w_open.append(period_levels(o, h, l, c, period_ids(universe.time, "W")).open)
-        m_open.append(period_levels(o, h, l, c, period_ids(universe.time, "M")).open)
-    fields = ("last_type", "last_start", "last_str", "pend_dir", "last_sig")
+        methods, p_k, atr_k, d_k, w_k, m_k = _one_symbol(universe, k, params, open_hour)
+        gates.append(methods)
+        power.append(p_k)
+        atr.append(atr_k)
+        d_open.append(d_k)
+        w_open.append(w_k)
+        m_open.append(m_k)
+    names = ("last_type", "last_start", "last_str", "pend_dir", "last_sig")
     stacked = {
         key: np.stack([np.stack([getattr(g, f) for g in methods], axis=1) for methods in gates], 1)
-        for key, f in zip(("dirs", "starts", "strs", "pends", "sigs"), fields)
+        for key, f in zip(("dirs", "starts", "strs", "pends", "sigs"), names)
     }
     cols = (np.column_stack(x) for x in (power, atr, d_open, w_open, m_open))
     return stacked, *cols

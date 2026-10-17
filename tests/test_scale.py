@@ -99,8 +99,15 @@ def listed_late(n, late, first_bar, bars=1500, seed=5):
     return Universe(base.symbols, base.time, open_, high, low, close, volume)
 
 
-def test_symbols_listed_later_stay_nan_and_never_trade_before_their_listing():
-    n, late, first_bar = 60, 30, 700
+def sliced_from(data, first):
+    return Universe(
+        data.symbols, data.time[first:], data.open[first:], data.high[first:], data.low[first:],
+        data.close[first:], data.volume[first:],
+    )  # fmt: skip
+
+
+def test_symbols_listed_later_never_trade_before_listing_but_do_trade_after():
+    n, late, first_bar = 40, 20, 700
     data = listed_late(n, late, first_bar)
     trade = TradeParams(
         max_slots=4, use_dyn=True, kelly=KellyParams(on=True), pool=PoolParams(on=True), dr_on=True
@@ -111,12 +118,25 @@ def test_symbols_listed_later_stay_nan_and_never_trade_before_their_listing():
     )  # fmt: skip
     assert (result.sides[:first_bar, late:] == 0).all()
     assert (result.notionals[:first_bar, late:] == 0).all()
-    assert all(
-        t.open_bar >= first_bar for t in result.trades if t.symbol >= late
-    ), "listelenmeden önce işlem açıldı"
-    opened = {t.symbol for t in result.trades}
-    assert opened & set(range(late)) and np.isfinite(result.realised).all()
-    types = result.panel.types
-    assert (np.nan_to_num(types[:first_bar, late:]) == 0).all()
-    ranks = result.panel.rank.top[:first_bar, late:]
-    assert not ranks.any()
+    assert not result.panel.rank.top[:first_bar, late:].any()
+    late_trades = [t for t in result.trades if t.symbol >= late]
+    assert late_trades and all(t.open_bar >= first_bar for t in late_trades)
+    assert {t.symbol for t in result.trades} & set(range(late)) and np.isfinite(
+        result.realised
+    ).all()
+
+
+def test_a_late_listed_symbols_series_starts_at_its_own_first_bar():
+    n, late, first_bar = 24, 12, 600
+    data = listed_late(n, late, first_bar, bars=1400)
+    params = panel_params(n_top=4, max_slots=3)
+    wide = build_panel(data, params, True)
+    reference = build_panel(sliced_from(data, first_bar), params, True)
+    for name in ("types", "starts", "strengths", "methods", "pcts", "base_scores", "atr", "power"):
+        assert np.array_equal(
+            getattr(wide, name)[first_bar:, late:],
+            getattr(reference, name)[:, late:],
+            equal_nan=True,
+        ), name
+    assert np.isnan(wide.atr[:first_bar, late:]).all()
+    assert np.isfinite(wide.atr[first_bar + 50 :, late:]).all()
