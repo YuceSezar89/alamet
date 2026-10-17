@@ -188,7 +188,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start", default="2023-07-01")
     parser.add_argument("--root", default="")
     parser.add_argument("--symbols", nargs="+", default=list(SYMBOLS))
-    parser.add_argument("--universe", default="", help="alamet.market ile kaydedilmiş evren dosyası")
+    parser.add_argument(
+        "--universe", default="", help="alamet.market ile kaydedilmiş evren dosyası"
+    )
     parser.add_argument("--workers", type=int, default=WORKERS)
     parser.add_argument("--no-tail", action="store_true", help="REST ile kuyruk tamamlamayı atla")
     args = parser.parse_args(argv)

@@ -257,7 +257,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tf", default=DEFAULT_TF.interval, help="sinyal TF'si: 1m, 5m, 15m, ...")
     parser.add_argument("--root", default="", help="varsayılan: data/binance_<tf>")
     parser.add_argument("--symbols", nargs="+", default=list(SYMBOLS))
-    parser.add_argument("--universe", default="", help="alamet.market ile kaydedilmiş evren dosyası")
+    parser.add_argument(
+        "--universe", default="", help="alamet.market ile kaydedilmiş evren dosyası"
+    )
     args = parser.parse_args(argv)
     if args.universe:
         args.symbols = list(bases(load_snapshot(Path(args.universe))))

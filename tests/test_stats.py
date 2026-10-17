@@ -3,11 +3,11 @@ import numpy as np
 from alamet.engine import TradeParams
 from alamet.stages import panel_params
 from alamet.stats import (
-    cause_buckets,
     DYN_BUCKETS,
     StatsParams,
     TradeLog,
     TradeStats,
+    cause_buckets,
     live_rows,
     stats_layout,
     vector_names,
