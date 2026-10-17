@@ -250,6 +250,10 @@ class LiveFeed:  # pylint: disable=too-many-instance-attributes
         """Hazırla, WebSocket'i aç, sonsuza kadar işle. Her mum `settle_ms` sonra bir kez uzlaştırılır."""
         await self.prepare()
         await self.start()
+        await self.loop(poll_s)
+
+    async def loop(self, poll_s: float = 0.5) -> None:
+        """WebSocket açıkken sonsuz döngü: mumları işle, kapanıştan `settle_ms` sonra uzlaştır."""
         try:
             while True:
                 await asyncio.sleep(poll_s)

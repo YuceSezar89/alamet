@@ -279,6 +279,13 @@ class Store:
             query, args = query + " WHERE kind = ?", (kind,)
         return pd.read_sql_query(query + " ORDER BY id", self.conn, params=args)
 
+    def note(self, kind: str, bar_time: int, symbol: str | None, payload: dict) -> None:
+        """Adım dışı bir olayı (ör. veri düzeltmesi) hemen kaydeder."""
+        self.conn.execute(
+            "INSERT INTO events(bar_time, phase, seq, kind, symbol, payload) VALUES (?,?,?,?,?,?)",
+            (bar_time, -1, 0, kind, symbol, json.dumps(_clean(payload), sort_keys=True)),
+        )
+
     def snapshot_times(self) -> list[int]:
         return [r[0] for r in self.conn.execute("SELECT bar_time FROM snapshots ORDER BY bar_time")]
 
