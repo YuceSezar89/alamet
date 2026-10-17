@@ -23,6 +23,7 @@ import numpy as np
 
 from alamet.binance_data import default_root, load_universe_binance
 from alamet.engine import TradeParams
+from alamet.exchange import default_client
 from alamet.livefeed import BarSet, Correction, LiveFeed
 from alamet.market import bases, load_snapshot
 from alamet.panel import PanelParams
@@ -80,10 +81,11 @@ class Runner:  # pylint: disable=too-many-instance-attributes
             self.panel, self.trade, symbols, anchor_ms, daily_mode, first_day=None
         )
         self.store = Store(db_path)
+        default_client().log = log
         self.system: StepSystem | None = None
         self.corrections = 0
         self.feed = LiveFeed(
-            root, symbols, tf, self.on_bar, self.on_correction, **(feed_options or {})
+            root, symbols, tf, self.on_bar, self.on_correction, log=log, **(feed_options or {})
         )
 
     # ------------------------------------------------------------- açılış
@@ -130,8 +132,11 @@ class Runner:  # pylint: disable=too-many-instance-attributes
         """Geçmişi tamamla, durumu kur/yükle ve WebSocket açılmadan önce yetişene kadar eşitle."""
         system = self.restore_or_create()
         while True:
+            self.log("Geçmiş mumlar tamamlanıyor (REST)")
             await self.feed.prepare()
-            if self.sync(system) == 0:
+            replayed = self.sync(system)
+            self.log(f"Eşitleme: {replayed} yeni bar işlendi")
+            if replayed == 0:
                 break
         self.system = system
         return system

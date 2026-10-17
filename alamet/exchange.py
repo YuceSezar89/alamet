@@ -91,6 +91,7 @@ class BinanceRest:  # pylint: disable=too-many-instance-attributes
         self.base_url, self.request, self.budget = base_url, request, budget
         self.clock, self.sleep, self.retry_delay_s = clock, sleep, retry_delay_s
         self.banned_until = 0.0
+        self.log: Callable[[str], None] = lambda _text: None
         self._spent: deque[tuple[float, int]] = deque()
 
     @property
@@ -102,6 +103,7 @@ class BinanceRest:  # pylint: disable=too-many-instance-attributes
         while True:
             now = self.clock()
             if now < self.banned_until:
+                self.log(f"REST: IP bekleme süresi, {self.banned_until - now:.0f} sn bekleniyor")
                 await self.sleep(self.banned_until - now)
                 continue
             while self._spent and self._spent[0][0] <= now - WINDOW_S:
@@ -110,7 +112,10 @@ class BinanceRest:  # pylint: disable=too-many-instance-attributes
             if used + weight <= self.budget or not self._spent:
                 self._spent.append((now, weight))
                 return
-            await self.sleep(max(self._spent[0][0] + WINDOW_S - now, 0.05))
+            wait = max(self._spent[0][0] + WINDOW_S - now, 0.05)
+            if wait > 2:
+                self.log(f"REST: istek bütçesi dolu, {wait:.0f} sn bekleniyor")
+            await self.sleep(wait)
 
     async def get_json(self, path: str, params: dict[str, Any], weight: int = 1) -> Any:
         url = f"{self.base_url}/{path}"
@@ -121,9 +126,11 @@ class BinanceRest:  # pylint: disable=too-many-instance-attributes
                 status, headers, body = await self.request(url, params)
             except (OSError, asyncio.TimeoutError) as exc:
                 error = exc
+                self.log(f"REST: {path} deneme {attempt + 1} başarısız ({type(exc).__name__})")
                 await self.sleep(self.retry_delay_s * (attempt + 1))
                 continue
             if status in (418, 429):
+                self.log(f"REST: HTTP {status}")
                 self.banned_until = max(
                     self.banned_until, ban_until(status, headers, body, self.clock())
                 )

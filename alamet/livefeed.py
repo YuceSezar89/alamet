@@ -125,6 +125,7 @@ class LiveFeed:  # pylint: disable=too-many-instance-attributes
         repair_delay_s: float = REPAIR_DELAY_S,
         fetch_page: PageFetcher | None = None,
         settle_ms: int = SETTLE_MS,
+        log: Callable[[str], None] | None = None,
     ) -> None:
         self.root, self.symbols, self.tf = root, symbols, tf
         self.on_bar, self.on_correction = on_bar, on_correction
@@ -132,6 +133,7 @@ class LiveFeed:  # pylint: disable=too-many-instance-attributes
         self.repair_attempts, self.repair_delay_s = repair_attempts, repair_delay_s
         self.fetch_page = fetch_page
         self.settle_ms = settle_ms
+        self.log = log or (lambda _text: None)
         self._reconciled = 0
         self.aggregator = BarAggregator(symbols, tf, grace_ms)
         self._stop: Callable[[], Awaitable[None]] | None = None
@@ -149,7 +151,9 @@ class LiveFeed:  # pylint: disable=too-many-instance-attributes
     async def prepare(self) -> int:
         """Geçmişi şimdiye kadar tamamla ve birleştiriciyi sıradaki sinyal mumundan başlat."""
         last = []
-        for base in self.symbols:
+        for number, base in enumerate(self.symbols, 1):
+            if number % 25 == 0:
+                self.log(f"  geçmiş tamamlanıyor {number}/{len(self.symbols)}")
             cache = load_cache(self.root, base)
             if cache.empty:
                 raise ValueError(f"{base}: önbellek boş; önce alamet.bulk_data ile geçmişi indir")
