@@ -207,14 +207,14 @@ def test_fills_sum_commission_and_realized_pnl():
         (
             200,
             [
-                {"commission": "0.2", "realizedPnl": "1.5"},
-                {"commission": "0.1", "realizedPnl": "-0.5"},
+                {"commission": "0.2", "realizedPnl": "1.5", "price": "1", "qty": "1"},
+                {"commission": "0.1", "realizedPnl": "-0.5", "price": "1", "qty": "1"},
             ],
         )
     )
-    assert run(api.fills("BTCUSDT", 9)) == pytest.approx(
-        {"commission": 0.3, "realized_pnl": 1.0, "trades": 2.0}
-    )
+    summary = run(api.fills("BTCUSDT", 9))
+    assert summary["commission"] == pytest.approx(0.3)
+    assert summary["realized_pnl"] == pytest.approx(1.0) and summary["trades"] == 2.0
 
 
 def test_parse_order_tolerates_missing_fields():

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent.parent / "alamet"
-THIRD_PARTY = {"numpy", "pandas", "aiohttp", "websockets", "pyarrow"}
+THIRD_PARTY = {"numpy", "pandas", "aiohttp", "websockets", "pyarrow", "yarl"}
 OLD_SYSTEM = {
     "binance_client", "config", "database", "dashboard", "desktop", "indicators",
     "live_data_manager", "signals", "utils", "backtest", "research", "run_services",
