@@ -83,6 +83,7 @@ class Runner:  # pylint: disable=too-many-instance-attributes
         self.store = Store(db_path)
         default_client().log = log
         self.system: StepSystem | None = None
+        self.trader = None
         self.corrections = 0
         self.feed = LiveFeed(
             root, symbols, tf, self.on_bar, self.on_correction, log=log, **(feed_options or {})
@@ -139,6 +140,9 @@ class Runner:  # pylint: disable=too-many-instance-attributes
             if replayed == 0:
                 break
         self.system = system
+        if self.trader is not None:
+            await self.trader.execute_pending()
+            await self.trader.reconcile()
         return system
 
     # ------------------------------------------------------------- canlı
@@ -156,7 +160,11 @@ class Runner:  # pylint: disable=too-many-instance-attributes
             result = sink(events, record, system)
             if asyncio.iscoroutine(result):
                 await result
-        self.store.commit(system, list(self.symbols), self.config)
+        rows = self.trader.plan(events, time_s) if self.trader is not None else []
+        self.store.commit(system, list(self.symbols), self.config, rows)
+        if self.trader is not None:
+            await self.trader.execute_pending()
+            await self.trader.reconcile()
         stamp = time.strftime("%Y-%m-%d %H:%M", time.gmtime(time_s))
         self.log(
             f"{stamp} UTC  sembol {len(bar.candles)}/{len(self.symbols)}  "

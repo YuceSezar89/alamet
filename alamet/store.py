@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, bar_time INTEGER NOT NULL, phase INTEGER, seq INTEGER,
     kind TEXT NOT NULL, symbol TEXT, payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_time ON events (bar_time);
+CREATE TABLE IF NOT EXISTS outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, trade_id INTEGER NOT NULL, kind TEXT NOT NULL,
+    base TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, quantity REAL, ref_price REAL,
+    client_id TEXT NOT NULL UNIQUE, reduce_only INTEGER NOT NULL, reason TEXT, bar_time INTEGER,
+    state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, error TEXT);
+CREATE TABLE IF NOT EXISTS orders (
+    client_id TEXT PRIMARY KEY, trade_id INTEGER, kind TEXT, symbol TEXT, side TEXT,
+    order_id INTEGER, status TEXT, quantity REAL, executed_qty REAL, avg_price REAL,
+    ref_price REAL, slippage_pct REAL, commission REAL, realized_pnl REAL, latency_ms REAL,
+    sent_at INTEGER, bar_time INTEGER);
+CREATE TABLE IF NOT EXISTS positions (
+    trade_id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, side INTEGER NOT NULL,
+    quantity REAL NOT NULL, avg_price REAL NOT NULL, opened_at INTEGER, closed_at INTEGER);
 """
 TRADE_COLUMNS = (
     "trade_id", "symbol", "side", "open_time", "close_time", "entry", "exit", "notional", "usd",
@@ -182,8 +195,11 @@ class Store:
         ]
 
     # --------------------------------------------------------------- yazma
-    def commit(self, system: StepSystem, symbols: list[str], config: dict) -> None:
-        """Kapanan işlemleri, olayları ve anlık görüntüyü TEK işlemde yazar."""
+    def commit(
+        self, system: StepSystem, symbols: list[str], config: dict, outbox: Iterable[dict] = ()
+    ) -> None:
+        """Kapanan işlemleri, olayları, emir niyetlerini (işlem kutusu) ve anlık görüntüyü TEK
+        işlemde yazar: durum ile emir niyeti birlikte kaydedilir ya da hiç kaydedilmez."""
         bar_time = system.prev_time
         if bar_time is None:
             raise ValueError("Henüz hiç bar işlenmedi")
@@ -195,6 +211,7 @@ class Store:
             self.conn.execute("BEGIN IMMEDIATE")
             self._write_trades(closed, symbols)
             self._write_events(events, symbols, times)
+            self._write_outbox(outbox)
             self.conn.execute(
                 "INSERT OR REPLACE INTO snapshots VALUES (?, ?, ?, ?, ?, ?)",
                 (bar_time, system.index, SCHEMA_VERSION, sha, state, int(time.time())),
@@ -223,6 +240,17 @@ class Store:
             f"VALUES ({','.join('?' * len(TRADE_COLUMNS))})",
             rows,
         )
+
+    def _write_outbox(self, rows: Iterable[dict]) -> None:
+        """Emir niyetleri; aynı `client_id` ikinci kez yazılmaz (kopya koruması)."""
+        for row in rows:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO outbox(trade_id, kind, base, symbol, side, quantity, "
+                "ref_price, client_id, reduce_only, reason, bar_time, state, error) "
+                "VALUES (:trade_id, :kind, :base, :symbol, :side, :quantity, :ref_price, "
+                ":client_id, :reduce_only, :reason, :bar_time, :state, :error)",
+                {"reason": None, "error": None, "state": "pending", **row},
+            )
 
     def _write_events(self, events, symbols: list[str], times: dict[int, int]) -> None:
         rows = []
@@ -285,6 +313,58 @@ class Store:
             "INSERT INTO events(bar_time, phase, seq, kind, symbol, payload) VALUES (?,?,?,?,?,?)",
             (bar_time, -1, 0, kind, symbol, json.dumps(_clean(payload), sort_keys=True)),
         )
+
+    # --------------------------------------------------------- emir kayıtları
+    def pending_outbox(self) -> list[dict]:
+        cursor = self.conn.execute("SELECT * FROM outbox WHERE state='pending' ORDER BY id")
+        names = [c[0] for c in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+    def outbox(self, state: str | None = None) -> pd.DataFrame:
+        query, args = "SELECT * FROM outbox", ()
+        if state is not None:
+            query, args = query + " WHERE state = ?", (state,)
+        return pd.read_sql_query(query + " ORDER BY id", self.conn, params=args)
+
+    def mark_outbox(
+        self, row_id: int, state: str, error: str | None = None, attempts: int = 0
+    ) -> None:
+        self.conn.execute(
+            "UPDATE outbox SET state=?, error=?, attempts=attempts+? WHERE id=?",
+            (state, error, attempts, row_id),
+        )
+
+    def record_order(self, order: dict) -> None:
+        names = list(order)
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO orders({','.join(names)}) VALUES ({','.join('?' * len(names))})",
+            [_clean(order[n]) for n in names],
+        )
+
+    def orders(self) -> pd.DataFrame:
+        return pd.read_sql_query("SELECT * FROM orders ORDER BY sent_at, client_id", self.conn)
+
+    def open_position(
+        self, trade_id: int, symbol: str, side: int, qty: float, price: float, at: int
+    ) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO positions VALUES (?, ?, ?, ?, ?, ?, NULL)",
+            (trade_id, symbol, side, qty, price, at),
+        )
+
+    def close_position(self, trade_id: int, at: int) -> None:
+        self.conn.execute("UPDATE positions SET closed_at=? WHERE trade_id=?", (at, trade_id))
+
+    def positions(self, open_only: bool = True) -> pd.DataFrame:
+        query = "SELECT * FROM positions" + (" WHERE closed_at IS NULL" if open_only else "")
+        return pd.read_sql_query(query + " ORDER BY trade_id", self.conn)
+
+    def get_meta(self, key: str, default=None):
+        value = self._meta(key)
+        return default if value is None else value
+
+    def set_meta(self, key: str, value) -> None:
+        self._set_meta(key, value)
 
     def snapshot_times(self) -> list[int]:
         return [r[0] for r in self.conn.execute("SELECT bar_time FROM snapshots ORDER BY bar_time")]
