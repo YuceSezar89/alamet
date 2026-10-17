@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alamet İzleme</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#68717d;--line:#e3e6ea;--ok:#1a8f4b;--warn:#c27a00;--bad:#c93232;--acc:#2456d6}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e6e9ed;--mute:#8d96a3;--line:#262c34;--ok:#3ccf7a;--warn:#e5a93a;--bad:#ff6b6b;--acc:#7aa2ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,system-ui,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.card small{display:block;color:var(--mute);font-size:12px}
+.card b{font-size:16px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--mute)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+nav button{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:6px 12px;border-radius:8px;cursor:pointer;font:inherit}
+nav button.on{border-color:var(--acc);color:var(--acc);font-weight:600}
+section{display:none}section.on{display:block}
+.wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--mute);font-weight:500;font-size:12px}
+tr:last-child td{border-bottom:0}
+.empty{padding:18px;color:var(--mute)}
+.tag{display:inline-block;padding:1px 7px;border-radius:99px;border:1px solid var(--line);font-size:12px}
+.note{color:var(--mute);font-size:12px;margin:10px 2px}
+</style>
+</head>
+<body>
+<main>
+<h1>Alamet · izleme</h1>
+<div class="cards" id="cards"></div>
+<nav id="tabs"></nav>
+<section id="s-cand"></section>
+<section id="s-open"></section>
+<section id="s-orders"></section>
+<section id="s-trades"></section>
+<section id="s-events"></section>
+<p class="note">Salt okunur görünüm. Saatler hem tarayıcı saatinle hem UTC olarak yazılır. Sayfa 5 sn'de bir yenilenir.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const TABS=[["cand","Adaylar"],["open","Açık işlemler"],["orders","Emirler"],["trades","Geçmiş"],["events","Olaylar"]];
+let cur=localStorage.getItem("tab")||"cand";
+const p2=n=>String(n).padStart(2,"0");
+function fmt(ts){if(!ts)return"-";const d=new Date(ts*1000);
+ return `${p2(d.getDate())}.${p2(d.getMonth()+1)} ${p2(d.getHours())}:${p2(d.getMinutes())} <span style="color:var(--mute)">(UTC ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())})</span>`}
+const num=(v,d=2)=>v==null?"-":Number(v).toFixed(d);
+const sideTxt=s=>s==1?'<span class="ok">LONG</span>':'<span class="bad">SHORT</span>';
+function table(head,rows){if(!rows.length)return'<div class="wrap"><div class="empty">Kayıt yok.</div></div>';
+ return`<div class="wrap"><table><thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`}
+function tabs(){$("tabs").innerHTML=TABS.map(([k,t])=>`<button class="${k==cur?"on":""}" onclick="pick('${k}')">${t}</button>`).join("");
+ TABS.forEach(([k])=>$("s-"+k).className=k==cur?"on":"")}
+function pick(k){cur=k;localStorage.setItem("tab",k);tabs()}
+function render(d){
+ const s=d.status,m=s.mode;
+ const fresh=s.age_s!=null&&s.age_s<1200;
+ const alive=s.alive&&fresh?["ok","Çalışıyor"]:(s.alive?["warn","Çalışıyor ama veri bayat"]:["bad","Süreç yok"]);
+ const modeTxt=!m?"-":({off:"Yalnız izleme (emir yok)",dry:"Kuru çalışma",demo:"DEMO emir",live:"GERÇEK emir"}[m.trade]||m.trade)+(m.only?` · yalnız ${m.only}`:" · tüm semboller");
+ const halt=s.halt?`<span class="bad">DURDURULDU: ${s.halt}</span>`:'<span class="ok">Yok</span>';
+ const ob=s.outbox||{};
+ $("cards").innerHTML=[
+  ["Bot",`<span class="dot ${alive[0]}"></span>${alive[1]}`],
+  ["Son işlenen bar",fmt(s.last_bar)],
+  ["Mod",modeTxt],
+  ["Durdurma",halt],
+  ["Açık işlem (sistem)",d.open.length],
+  ["Borsa pozisyonu",d.positions.length],
+  ["Bugün gönderilen emir",s.orders_today],
+  ["Toplam kapanan işlem",s.trade_count],
+  ["Engellenen / başarısız emir",`${(ob.blocked||0)+(ob.skipped||0)} / ${ob.failed||0}`],
+ ].map(([a,b])=>`<div class="card"><small>${a}</small><b>${b}</b></div>`).join("");
+ $("s-cand").innerHTML=`<p class="note">Şu an ilk 2'de olan semboller. "Hazır" olması için çift ayrışma ve yön kilidi gerekir.</p>`+table(
+  ["Sembol","Yön","Ayrışma no","Şu anki hareket %","Çift ayrışma eşiği %","Çift ayrışma","Yön kilidi","Durum"],
+  d.candidates.map(c=>[`<b>${c.symbol}</b>`,sideTxt(c.side),c.number,num(c.current),num(c.threshold),c.double?'<span class="ok">var</span>':"yok",
+   c.lock==c.side?'<span class="ok">geçti</span>':'<span class="warn">geçmedi</span>',
+   c.ready?'<span class="tag ok">İşlem için hazır</span>':`<span class="warn">Bekliyor: ${c.blockers.join(", ")}</span>`]));
+ $("s-open").innerHTML=`<h3>Sistemin açık işlemleri</h3>`+table(["Sembol","Yön","Giriş","Büyüklük (sanal $)","Açıklık (bar)"],
+  d.open.map(o=>[`<b>${o.symbol}</b>`,sideTxt(o.side),num(o.entry,5),num(o.notional),o.bars]))
+  +`<h3>Borsa pozisyonları (bot kaydı)</h3>`+table(["Sembol","Yön","Miktar","Ort. fiyat","Açılış"],
+  d.positions.map(p=>[`<b>${p.symbol}</b>`,sideTxt(p.side),p.quantity,num(p.avg_price,5),fmt(p.opened_at/1000)]));
+ $("s-orders").innerHTML=table(["Zaman","Emir","Sembol","Yön","Durum","Miktar","Ort. fiyat","Kayma %","Gecikme ms","Komisyon"],
+  d.orders.map(o=>[fmt(o.sent_at/1000),o.client_id,o.symbol,o.side,o.status,o.executed_qty,num(o.avg_price,5),num(o.slippage_pct,4),num(o.latency_ms,0),num(o.commission,4)]))
+  +(d.outbox_problems.length?`<h3>Engellenen / başarısız / atlanan</h3>`+table(["Bar","Sembol","Tür","Durum","Neden"],
+  d.outbox_problems.map(o=>[fmt(o.bar_time),o.base,o.kind,o.state,o.error||"-"])):"");
+ $("s-trades").innerHTML=table(["Açılış","Sembol","Yön","Yöntem","Giriş","Çıkış","PNL %","R","Süre (bar)","Çıkış nedeni","Sıra","Ayrışma no"],
+  d.trades.map(t=>[fmt(t.open_time),`<b>${t.symbol}</b>`,sideTxt(t.side),t.method_text,num(t.entry,5),num(t.exit,5),
+   `<span class="${t.pnl_pct>=0?"ok":"bad"}">${num(t.pnl_pct)}</span>`,num(t.r),t.hold,t.reason_text,t.rank,t.div_n]));
+ $("s-events").innerHTML=table(["Bar","Olay","Sembol","Ayrıntı"],d.events.map(e=>[fmt(e.bar_time),e.kind_text,e.symbol||"-",`<span style="color:var(--mute)">${e.payload}</span>`]));
+}
+async function tick(){try{const r=await fetch("/api/all");render(await r.json())}catch(e){$("cards").innerHTML=`<div class="card"><small>Hata</small><b class="bad">Veri alınamadı</b></div>`}}
+tabs();tick();setInterval(tick,5000);
+</script>
+</body>
+</html>
