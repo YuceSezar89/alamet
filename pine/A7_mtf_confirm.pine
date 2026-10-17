@@ -1,0 +1,65 @@
+//@version=6
+// DEPV2 A7 — MTF güç birleşimi + TF onayı (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_sym 485-495. satırlar)
+// finalPct = 4 MTF HA skorunun ağırlıklı ortalaması. TF onayı: 4 HA'nın kaçı yönde? (LONG >0, SHORT <0)
+// Grafik periyodu sinyal TF'si (15 dk) olmalı.
+indicator("DEPV2 A7 · MTF GÜÇ + TF ONAYI", shorttitle = "A7", precision = 8)
+
+ssTf = input.timeframe("15", "Sinyal zaman dilimi (ssTf)")
+vpM1 = input.int(2, "MTF 1 çarpanı", minval = 2)
+vpM2 = input.int(3, "MTF 2 çarpanı", minval = 2)
+vpM3 = input.int(4, "MTF 3 çarpanı", minval = 2)
+vpM4 = input.int(6, "MTF 4 çarpanı", minval = 2)
+vpW1 = input.float(2.0, "MTF 1 ağırlığı", minval = 0.1)
+vpW2 = input.float(3.0, "MTF 2 ağırlığı", minval = 0.1)
+vpW3 = input.float(4.0, "MTF 3 ağırlığı", minval = 0.1)
+vpW4 = input.float(6.0, "MTF 4 ağırlığı", minval = 0.1)
+vpTfOn   = input.bool(true, "TF onayı sistemini aç")
+vpTfNeed = input.int(3, "Onay için sinyal yönünde olması gereken MTF Heikin Ashi sayısı (4 üzerinden)", minval = 1, maxval = 4)
+
+string tfM1 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM1)
+string tfM2 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM2)
+string tfM3 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM3)
+string tfM4 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM4)
+
+f_haScore(string tf) =>
+    bool nw = timeframe.change(tf)
+    var float cO = na
+    var float cH = na
+    var float cL = na
+    var float pHaO = na
+    var float pHaC = na
+    if nw or na(cO)
+        if not na(cO)
+            float lastC = (cO + cH + cL + close[1]) / 4.0
+            float lastO = na(pHaO) ? (cO + close[1]) / 2.0 : (pHaO + pHaC) / 2.0
+            pHaO := lastO
+            pHaC := lastC
+        cO := open
+        cH := high
+        cL := low
+    else
+        cH := math.max(cH, high)
+        cL := math.min(cL, low)
+    float haC = (cO + cH + cL + close) / 4.0
+    float haO = na(pHaO) ? (cO + close) / 2.0 : (pHaO + pHaC) / 2.0
+    float haH = math.max(cH, math.max(haO, haC))
+    float haL = math.min(cL, math.min(haO, haC))
+    float rg  = haH - haL
+    rg != 0 ? (haC - haO) / rg * 100.0 : 0.0
+
+float hs1 = f_haScore(tfM1)
+float hs2 = f_haScore(tfM2)
+float hs3 = f_haScore(tfM3)
+float hs4 = f_haScore(tfM4)
+float finalPct = (hs1 * vpW1 + hs2 * vpW2 + hs3 * vpW3 + hs4 * vpW4) / (vpW1 + vpW2 + vpW3 + vpW4)
+
+int nBullTf = (hs1 > 0 ? 1 : 0) + (hs2 > 0 ? 1 : 0) + (hs3 > 0 ? 1 : 0) + (hs4 > 0 ? 1 : 0)
+int nBearTf = (hs1 < 0 ? 1 : 0) + (hs2 < 0 ? 1 : 0) + (hs3 < 0 ? 1 : 0) + (hs4 < 0 ? 1 : 0)
+bool tfOkL = not vpTfOn or nBullTf >= vpTfNeed
+bool tfOkS = not vpTfOn or nBearTf >= vpTfNeed
+
+plot(finalPct, "FINAL_PCT")
+plot(nBullTf, "N_BULL")
+plot(nBearTf, "N_BEAR")
+plot(tfOkL ? 1 : 0, "TFOK_L")
+plot(tfOkS ? 1 : 0, "TFOK_S")

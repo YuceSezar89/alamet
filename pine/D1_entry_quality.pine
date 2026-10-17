@@ -1,0 +1,389 @@
+//@version=6
+// DEPV2 D1 — GİRİŞ KALİTESİ FİLTRELERİ (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_qual 1588-1617; lastLoss 1717).
+// TREND yönteminin sinyal başlangıcı, MTF gücü, günlük/haftalık/aylık open ve gölge kasa TREND hesabının son zararı üzerinde iki ayar seti × iki yön.
+// Çıktı: bit maskesi (1 güç · 2 uzama · 4 soğuma · 8 günlük open · 16 open uzak · 32 haftalık · 64 aylık). Grafik 15 dk olmalı.
+indicator("DEPV2 D1 · GİRİŞ KALİTESİ", shorttitle = "D1", precision = 8)
+
+atrPeriod = input.int(10, "ATR Length (atrPeriod)", minval = 1)
+tdLen  = input.int(24, "TREND: seviye ortalaması periyodu (HLC3 SMA)", minval = 3)
+tdThr  = input.float(0.5, "TREND: min. seviye skoru", minval = 0.05, step = 0.05)
+moLen  = input.int(12, "MOMENTUM: ROC periyodu (bar)", minval = 2)
+moZLen = input.int(48, "MOMENTUM: σ penceresi", minval = 10)
+moThr  = input.float(1.0, "MOMENTUM: min. |z|", minval = 0.1, step = 0.1)
+vaSlow = input.int(12, "VOLATİLİTE: yavaş ATR periyodu", minval = 5)
+vaFast = input.int(5, "VOLATİLİTE: hızlı ATR periyodu", minval = 2)
+vaThr  = input.float(1.3, "VOLATİLİTE: min. genişleme oranı", minval = 1.0, step = 0.05)
+vaCalm = input.float(0.8, "VOLATİLİTE: sakinleşme eşiği", minval = 0.1, maxval = 1.0, step = 0.05)
+hvLen  = input.int(12, "HACİM: pencere", minval = 5)
+hvBand = input.float(0.5, "HACİM: fiyat bölgesi genişliği (± ATR)", minval = 0.1, step = 0.1)
+hvThr  = input.float(2.0, "HACİM: min. katılım oranı", minval = 0.5, step = 0.1)
+hvFlow = input.float(0.1, "HACİM: min. akış oranı", minval = 0.01, maxval = 1.0, step = 0.01)
+
+ssTf = input.timeframe("15", "Sinyal zaman dilimi (ssTf)")
+vpM1 = input.int(2, "MTF 1 çarpanı", minval = 2)
+vpM2 = input.int(3, "MTF 2 çarpanı", minval = 2)
+vpM3 = input.int(4, "MTF 3 çarpanı", minval = 2)
+vpM4 = input.int(6, "MTF 4 çarpanı", minval = 2)
+vpCool     = input.int(10, "Sinyal cooldown (sinyal TF barı)", minval = 1, maxval = 100)
+vpTfOn     = input.bool(true, "TF onayı sistemini aç")
+vpTfNeed   = input.int(3, "Onay için gereken MTF Heikin Ashi sayısı (4 üzerinden)", minval = 1, maxval = 4)
+vpConfBars = input.int(1, "Onay için ardışık bar sayısı", minval = 1, maxval = 10)
+vpPendMax  = input.int(12, "Onay bekleme süresi (bar)", minval = 1, maxval = 200)
+
+string tfM1 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM1)
+string tfM2 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM2)
+string tfM3 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM3)
+string tfM4 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM4)
+
+f_haScore(string tf) =>
+    bool nw = timeframe.change(tf)
+    var float cO = na
+    var float cH = na
+    var float cL = na
+    var float pHaO = na
+    var float pHaC = na
+    if nw or na(cO)
+        if not na(cO)
+            float lastC = (cO + cH + cL + close[1]) / 4.0
+            float lastO = na(pHaO) ? (cO + close[1]) / 2.0 : (pHaO + pHaC) / 2.0
+            pHaO := lastO
+            pHaC := lastC
+        cO := open
+        cH := high
+        cL := low
+    else
+        cH := math.max(cH, high)
+        cL := math.min(cL, low)
+    float haC = (cO + cH + cL + close) / 4.0
+    float haO = na(pHaO) ? (cO + close) / 2.0 : (pHaO + pHaC) / 2.0
+    float haH = math.max(cH, math.max(haO, haC))
+    float haL = math.min(cL, math.min(haO, haC))
+    float rg  = haH - haL
+    rg != 0 ? (haC - haO) / rg * 100.0 : 0.0
+
+f_gate(bool rawL, bool rawS, bool tfL, bool tfS, int strL, int strS) =>
+    var int confDir = 0
+    var int lastBar = 0
+    var int pendDir = 0
+    var int pendBar = 0
+    var int pendStr = 0
+    var int confCnt = 0
+    var float lastSig = -100000.0
+    if pendDir == 1 and (not rawL or bar_index - pendBar > vpPendMax)
+        pendDir := 0
+        confCnt := 0
+    if pendDir == -1 and (not rawS or bar_index - pendBar > vpPendMax)
+        pendDir := 0
+        confCnt := 0
+    bool coolOk = (bar_index - lastBar) >= vpCool
+    if rawL and confDir != 1 and pendDir != 1 and coolOk
+        pendDir := 1
+        pendBar := bar_index
+        pendStr := strL
+        confCnt := 0
+        lastBar := bar_index
+    if rawS and confDir != -1 and pendDir != -1 and coolOk
+        pendDir := -1
+        pendBar := bar_index
+        pendStr := strS
+        confCnt := 0
+        lastBar := bar_index
+    bool sigL = false
+    bool sigS = false
+    int  sStr = 0
+    if pendDir == 1
+        confCnt := tfL ? confCnt + 1 : 0
+        if confCnt >= vpConfBars
+            sigL := true
+            sStr := pendStr + (bar_index > pendBar ? 3 : 0)
+            confDir := 1
+            pendDir := 0
+            confCnt := 0
+    else if pendDir == -1
+        confCnt := tfS ? confCnt + 1 : 0
+        if confCnt >= vpConfBars
+            sigS := true
+            sStr := pendStr + (bar_index > pendBar ? 3 : 0)
+            confDir := -1
+            pendDir := 0
+            confCnt := 0
+    var float lastStart = na
+    var float lastType  = 0.0
+    var int   lastStr   = 0
+    if sigL
+        lastStart := low
+        lastType  := 1.0
+        lastStr   := sStr
+        lastSig   := 1.0 * bar_index
+    if sigS
+        lastStart := high
+        lastType  := -1.0
+        lastStr   := sStr
+        lastSig   := 1.0 * bar_index
+    [lastType, lastStart, 1.0 * lastStr, 1.0 * pendDir, lastSig]
+
+// ---- MTF Heikin Ashi gücü + TF onayı (A6 + A7) ----
+float hs1 = f_haScore(tfM1)
+float hs2 = f_haScore(tfM2)
+float hs3 = f_haScore(tfM3)
+float hs4 = f_haScore(tfM4)
+int nBullTf = (hs1 > 0 ? 1 : 0) + (hs2 > 0 ? 1 : 0) + (hs3 > 0 ? 1 : 0) + (hs4 > 0 ? 1 : 0)
+int nBearTf = (hs1 < 0 ? 1 : 0) + (hs2 < 0 ? 1 : 0) + (hs3 < 0 ? 1 : 0) + (hs4 < 0 ? 1 : 0)
+bool tfOkL = not vpTfOn or nBullTf >= vpTfNeed
+bool tfOkS = not vpTfOn or nBearTf >= vpTfNeed
+
+atrV = ta.atr(atrPeriod)
+float rgO = high - low
+
+// ---- ① TREND (A2) ----
+float tdMa = ta.sma(hlc3, tdLen)
+float tdZ  = atrV > 0 ? (close - tdMa) / atrV : 0.0
+var int tdSt = 0
+if tdZ >= tdThr
+    tdSt := 1
+else if tdZ <= -tdThr
+    tdSt := -1
+else if (tdSt == 1 and tdZ < 0) or (tdSt == -1 and tdZ > 0)
+    tdSt := 0
+int strTd = math.abs(tdZ) >= tdThr * 3 ? 2 : (math.abs(tdZ) >= tdThr * 2 ? 1 : 0)
+[ty0, st0, sg0, pd0, sb0] = f_gate(tdSt == 1, tdSt == -1, tfOkL, tfOkS, strTd, strTd)
+
+// ---- ② MOMENTUM (A3) ----
+float lr1  = math.log(close / close[1])
+float lrSd = ta.stdev(lr1, moZLen)
+float lrN  = math.log(close / close[moLen])
+float moZ  = (not na(lrSd) and lrSd > 0) ? lrN / (lrSd * math.sqrt(moLen)) : 0.0
+var int moSt = 0
+if moZ >= moThr
+    moSt := 1
+else if moZ <= -moThr
+    moSt := -1
+else if (moSt == 1 and moZ < 0) or (moSt == -1 and moZ > 0)
+    moSt := 0
+int strMo = math.abs(moZ) >= moThr * 3 ? 2 : (math.abs(moZ) >= moThr * 2 ? 1 : 0)
+[ty1, st1, sg1, pd1, sb1] = f_gate(moSt == 1, moSt == -1, tfOkL, tfOkS, strMo, strMo)
+
+// ---- ③ VOLATİLİTE (A4) ----
+float vaTr  = ta.tr(true)
+float atrSl = ta.atr(vaSlow)
+float atrFs = ta.atr(vaFast)
+float vaX   = nz(atrSl[1]) > 0 ? vaTr / atrSl[1] : 1.0
+float vaRat = atrSl > 0 ? atrFs / atrSl : 1.0
+bool vaUp = vaX >= vaThr and close > open
+bool vaDn = vaX >= vaThr and close < open
+var int vaSt = 0
+if vaUp
+    vaSt := 1
+else if vaDn
+    vaSt := -1
+else if vaRat < vaCalm
+    vaSt := 0
+int strVa = vaX >= vaThr * 1.5 ? 2 : (vaX >= vaThr * 1.2 ? 1 : 0)
+[ty2, st2, sg2, pd2, sb2] = f_gate(vaSt == 1, vaSt == -1, tfOkL, tfOkS, strVa, strVa)
+
+// ---- ④ HACİM (A5) ----
+float hvSma = ta.sma(volume, hvLen)
+float relV  = hvSma > 0 ? volume / hvSma : 1.0
+float dltV  = rgO > 0 ? volume * ((close - low) - (high - close)) / rgO : 0.0
+float sumD  = math.sum(dltV, hvLen)
+float sumV  = math.sum(volume, hvLen)
+float flowV = sumV > 0 ? sumD / sumV : 0.0
+float sumIn  = 0.0
+float sumAll = 0.0
+for i = 0 to hvLen - 1
+    float vi = nz(volume[i])
+    sumAll += vi
+    if math.abs(hlc3[i] - close) <= hvBand * atrV
+        sumIn += vi
+float hvShare = sumAll > 0 ? sumIn / sumAll : 0.0
+float hvRat   = relV / math.max(hvShare, 0.1)
+bool hvUp = hvRat >= hvThr and flowV >= hvFlow
+bool hvDn = hvRat >= hvThr and flowV <= -hvFlow
+var int hvSt = 0
+if hvUp
+    hvSt := 1
+else if hvDn
+    hvSt := -1
+else if (hvSt == 1 and flowV < 0) or (hvSt == -1 and flowV > 0)
+    hvSt := 0
+int strHv = hvRat >= hvThr * 1.5 ? 2 : (hvRat >= hvThr * 1.2 ? 1 : 0)
+[ty3, st3, sg3, pd3, sb3] = f_gate(hvSt == 1, hvSt == -1, tfOkL, tfOkS, strHv, strHv)
+
+rUnit      = input.float(1.5, "R birimi (×ATR)", minval = 0.1, step = 0.1)
+startCap   = input.float(1000.0, "Başlangıç kasası (USDT)", minval = 1.0)
+riskPct    = input.float(0.5, "1R başına kasa %", minval = 0.05, step = 0.05)
+maxLev     = input.float(5.0, "Maks. kaldıraç", minval = 1.0)
+feeIn      = input.float(0.02, "Giriş komisyonu (%)", minval = 0.0, step = 0.005)
+feeOut     = input.float(0.02, "Çıkış komisyonu (%)", minval = 0.0, step = 0.005)
+slipPct    = input.float(0.0, "Slippage (%)", minval = 0.0, step = 0.005)
+dynDecay   = input.float(0.97, "Unutma katsayısı", minval = 0.80, maxval = 1.0, step = 0.01)
+dynDecayBars = input.int(96, "Sönümleme aralığı (SS barı)", minval = 1)
+
+float feeInE  = feeIn + slipPct
+float feeOutE = feeOut + slipPct
+
+var int ssIdx = 0
+if timeframe.change(ssTf)
+    ssIdx += 1
+
+var array<int>   shDir  = array.new<int>(5, 0)
+var array<int>   shPrev = array.new<int>(5, 9)
+var array<float> shEnt  = array.new<float>(5, na)
+var array<float> shNot  = array.new<float>(5, 0.0)
+var array<float> shRu   = array.new<float>(5, na)
+var array<int>   shCnt  = array.new<int>(5, 0)
+var array<int>   shWin  = array.new<int>(5, 0)
+var array<float> shNet  = array.new<float>(5, 0.0)
+var array<float> shNetD = array.new<float>(5, 0.0)
+var array<float> shSumR = array.new<float>(5, 0.0)
+var array<int>   shLoss = array.new<int>(5, -100000)
+
+f_tR(int d, float ent, float ru, float px) =>
+    ru > 0 ? (d * (px - ent) - (feeInE / 100.0 * ent + feeOutE / 100.0 * px)) / ru : 0.0
+
+f_tUsd(float notl, int d, float ent, float px) =>
+    notl * d * (px / ent - 1.0) - notl * feeInE / 100.0 - notl * (px / ent) * feeOutE / 100.0
+
+f_dirM(float v) => na(v) ? 0 : math.round(v)
+
+f_selector(int mode, int autoMinN, float autoMinNet, bool autoBlock) =>
+    var int   cbDir = 0
+    var int   cbM   = 0
+    var float cbSt  = na
+    var int   cbStr = 0
+    var int   autoM = -1
+    dirA = array.from(ty0, ty1, ty2, ty3)
+    stA  = array.from(st0, st1, st2, st3)
+    sgA  = array.from(sg0, sg1, sg2, sg3)
+    pdA  = array.from(pd0, pd1, pd2, pd3)
+    int pick = -1
+    if barstate.isconfirmed
+        int   bm   = -1
+        float bs   = autoMinNet
+        bool  anyD = false
+        for m = 0 to 3
+            if shCnt.get(m) >= autoMinN
+                anyD := true
+                if shNetD.get(m) > bs
+                    bs := shNetD.get(m)
+                    bm := m
+        autoM := bm
+        if bm >= 0
+            pick := bm
+        else if anyD and autoBlock
+            cbDir := 0
+            cbSt := na
+            cbStr := 0
+        else
+            pick := 0
+    if pick >= 0
+        int d = f_dirM(dirA.get(pick))
+        cbDir := d
+        cbM := pick
+        if d != 0
+            cbSt := stA.get(pick)
+            cbStr := math.round(nz(sgA.get(pick), 0.0))
+        else
+            cbSt := na
+            cbStr := 0
+    int pd = f_dirM(pdA.get(cbM))
+    [1.0 * cbDir, cbSt, 1.0 * cbStr, 1.0 * pd, 1.0 * cbM, 1.0 * autoM]
+
+[s1t, s1s, s1g, s1p, s1m, s1a] = f_selector(6, 3, 0.0, true)
+
+f_shadow() =>
+    if ssIdx % dynDecayBars == 0
+        for i = 0 to 4
+            shNetD.set(i, shNetD.get(i) * dynDecay)
+    float clS = close
+    float atS = atrV
+    if not na(clS) and not na(atS) and atS > 0 and clS > 0
+        for m = 0 to 4
+            int dN = m == 0 ? f_dirM(ty0) : (m == 1 ? f_dirM(ty1) : (m == 2 ? f_dirM(ty2) : (m == 3 ? f_dirM(ty3) : math.round(s1t))))
+            int pv = shPrev.get(m)
+            if pv == 9
+                shPrev.set(m, dN)
+            else if dN != pv
+                int cd = shDir.get(m)
+                if cd != 0
+                    float entO = shEnt.get(m)
+                    float usdO = f_tUsd(shNot.get(m), cd, entO, clS)
+                    float rO   = f_tR(cd, entO, shRu.get(m), clS)
+                    shNet.set(m, shNet.get(m) + usdO)
+                    shNetD.set(m, shNetD.get(m) + usdO)
+                    shSumR.set(m, shSumR.get(m) + rO)
+                    shCnt.set(m, shCnt.get(m) + 1)
+                    if usdO > 0
+                        shWin.set(m, shWin.get(m) + 1)
+                    else
+                        shLoss.set(m, ssIdx)
+                    shDir.set(m, 0)
+                if dN != 0
+                    float ruN   = rUnit * atS
+                    float distN = ruN / clS
+                    float notN  = math.min(startCap * riskPct / 100.0 / distN, startCap * maxLev)
+                    shDir.set(m, dN)
+                    shEnt.set(m, clS)
+                    shRu.set(m, ruN)
+                    shNot.set(m, notN)
+                shPrev.set(m, dN)
+    0
+
+if barstate.isconfirmed
+    f_shadow()
+
+vpW1 = input.float(2.0, "MTF 1 ağırlığı", minval = 0.1)
+vpW2 = input.float(3.0, "MTF 2 ağırlığı", minval = 0.1)
+vpW3 = input.float(4.0, "MTF 3 ağırlığı", minval = 0.1)
+vpW4 = input.float(6.0, "MTF 4 ağırlığı", minval = 0.1)
+float finalPct = (hs1 * vpW1 + hs2 * vpW2 + hs3 * vpW3 + hs4 * vpW4) / (vpW1 + vpW2 + vpW3 + vpW4)
+
+var float dOpen = na
+if timeframe.change("D") or na(dOpen)
+    dOpen := open
+
+f_per(string tf) =>
+    bool nw = timeframe.change(tf)
+    var float cO = na
+    if nw or na(cO)
+        cO := open
+    cO
+
+float wOpen = f_per("W")
+float mOpen = f_per("M")
+
+f_qual(int dd, float stE, float clE, float atE, float pwE, float dO, float wOv, float mOv, int lastL,
+       float vpMinPow, bool useExt, float maxExt, int coolBars, bool useDOp, bool useWOp, bool useMOp, float maxDOpDist) =>
+    int w = 0
+    if vpMinPow > 0 and not na(pwE) and (dd == 1 ? pwE < vpMinPow : pwE > -vpMinPow)
+        w += 1
+    if useExt and not na(stE) and not na(clE) and not na(atE) and atE > 0
+        float ex = (dd == 1 ? clE - stE : stE - clE) / atE
+        if ex <= 0 or ex > maxExt
+            w += 2
+    if ssIdx - lastL < coolBars
+        w += 4
+    if not na(dO) and not na(clE)
+        if useDOp and (dd == 1 ? clE <= dO : clE >= dO)
+            w += 8
+        if maxDOpDist > 0 and not na(atE) and atE > 0 and math.abs(clE - dO) / atE > maxDOpDist
+            w += 16
+    if useWOp and not na(wOv) and not na(clE) and (dd == 1 ? clE <= wOv : clE >= wOv)
+        w += 32
+    if useMOp and not na(mOv) and not na(clE) and (dd == 1 ? clE <= mOv : clE >= mOv)
+        w += 64
+    1.0 * w
+
+int lastLossT = shLoss.get(0)
+q1l = f_qual(1,  st0, close, atrV, finalPct, dOpen, wOpen, mOpen, lastLossT, 0.0, true, 4.0, 12, true, false, false, 0.0)
+q1s = f_qual(-1, st0, close, atrV, finalPct, dOpen, wOpen, mOpen, lastLossT, 0.0, true, 4.0, 12, true, false, false, 0.0)
+q2l = f_qual(1,  st0, close, atrV, finalPct, dOpen, wOpen, mOpen, lastLossT, 20.0, true, 1.5, 30, true, true, true, 2.0)
+q2s = f_qual(-1, st0, close, atrV, finalPct, dOpen, wOpen, mOpen, lastLossT, 20.0, true, 1.5, 30, true, true, true, 2.0)
+
+plot(volume, "VOL")
+plot(q1l, "Q1L")
+plot(q1s, "Q1S")
+plot(q2l, "Q2L")
+plot(q2s, "Q2S")
+plot(1.0 * lastLossT, "LL")
+plot(1.0 * ssIdx, "SS")

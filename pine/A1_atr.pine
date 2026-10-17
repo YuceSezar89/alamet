@@ -1,0 +1,11 @@
+//@version=6
+// DEPV2 A1 — TR + ATR (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_sym içindeki ta.atr(len))
+indicator("DEPV2 A1 · TR + ATR", shorttitle = "A1", precision = 8)
+
+atrLen = input.int(10, "ATR Length (atrPeriod)", minval = 1)
+
+trV  = ta.tr(true)
+atrV = ta.atr(atrLen)
+
+plot(trV,  "TR")
+plot(atrV, "ATR")

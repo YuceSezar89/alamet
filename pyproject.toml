@@ -1,0 +1,30 @@
+[project]
+name = "alamet"
+version = "0.1.0"
+description = "Alamet: Devis'So DEPV2 sinyal ve kasa sisteminin Python portu ve Binance Futures botu"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "aiohttp>=3.9",
+    "websockets>=12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "black", "isort", "pylint", "autoflake", "bandit"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pylint.format]
+max-line-length = 100

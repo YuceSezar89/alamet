@@ -1,0 +1,267 @@
+//@version=6
+// DEPV2 C4 — Ayrışma takibi, çift ayrışma, yön kilidi, işlem uygunluğu (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2,
+// f_own / f_upd / f_sc / f_lock / f_lastDbl 1318-1391, f_blockA ikinci yarı 1823-1854, f_elig 1863-1880).
+// Girdiler (yön, kapanış, ilk N, sıralı indeksler) C2'deki gibi 5 sembolün fiyatından deterministik üretilir,
+// plot edilir ve Python bunlardan takibi yeniden hesaplar. Sıralama C2'de doğrulandı. Havuz kapalı.
+// Sembol 5 bu testte XRP'dir (eşitlik sondası C2'de yapıldı). 15 dk grafikte çalıştırılmalıdır.
+indicator("DEPV2 C4 · AYRIŞMA TAKİBİ", shorttitle = "C4", precision = 8)
+
+t1 = input.symbol("BINANCE:BTCUSDT.P", "Symbol 1")
+t2 = input.symbol("BINANCE:ETHUSDT.P", "Symbol 2")
+t3 = input.symbol("BINANCE:SOLUSDT.P", "Symbol 3")
+t4 = input.symbol("BINANCE:BNBUSDT.P", "Symbol 4")
+t5 = input.symbol("BINANCE:XRPUSDT.P", "Symbol 5")
+
+ssTf          = input.timeframe("15", "Sinyal zaman dilimi (ssTf)")
+nTop          = input.int(2, "Market'ten ilk N hedef", minval = 1, maxval = 4)
+gapMin        = input.float(0.0, "Ayrışma için (N+1). sıradan min. fark", minval = 0.0, step = 0.1)
+maxDiv        = input.int(10, "Ayrışma geçmişi (hesap için tutulan son ayrışma sayısı)", minval = 2, maxval = 20)
+minPrev       = input.int(2, "Çift ayrışma: karşılaştırma için min. önceki ayrışma sayısı", minval = 2, maxval = 19)
+zMin          = input.float(1.0, "Çift ayrışma: kendi içinde ayrışma eşiği (σ)", minval = 0.0, step = 0.1)
+dblPosOnly    = input.bool(false, "Çift ayrışma: sadece POZİTİF önceki hareketlerle karşılaştır")
+minScore      = input.float(0.0, "Yön eşiği: kazanan tarafın min. PNL toplamı (%)", minval = 0.0, step = 0.1)
+minShare      = input.float(50.0, "Kazanan tarafın min. PNL payı (%)", minval = 50.0, maxval = 100.0, step = 1.0)
+needDbl       = input.bool(true, "İşlem için ★ ÇİFT ayrışma şart")
+tradeMinN     = input.int(1, "İşlem için min. ayrışma no", minval = 1, maxval = 20)
+maxLongSlots  = input.int(4, "Slot sayısı: her yönde", minval = 1, maxval = 4)
+allowL        = input.bool(true, "LONG izinli")
+allowS        = input.bool(true, "SHORT izinli")
+
+f_in() =>
+    float r  = math.log(close / close[12]) * 100.0
+    float aP = ta.atr(10) / close * 100.0
+    float ty = na(r) ? na : (r > 0.15 ? 1.0 : (r < -0.15 ? -1.0 : 0.0))
+    float sc = (na(ty) or ty == 0.0 or na(aP) or aP <= 0) ? na : ty * r / aP
+    float okv = ta.rsi(close, 14) > 40 ? 1.0 : 0.0
+    [ty, sc, okv, close]
+
+[ty1, sc1, ok1, cl1] = request.security(t1, ssTf, f_in())
+[ty2, sc2, ok2, cl2] = request.security(t2, ssTf, f_in())
+[ty3, sc3, ok3, cl3] = request.security(t3, ssTf, f_in())
+[ty4, sc4, ok4, cl4] = request.security(t4, ssTf, f_in())
+[ty5, sc5, ok5, cl5] = request.security(t5, ssTf, f_in())
+
+scR   = array.from(sc1, sc2, sc3, sc4, sc5)
+types = array.from(ty1, ty2, ty3, ty4, ty5)
+cls   = array.from(cl1, cl2, cl3, cl4, cl5)
+ownOk = array.from(ok1 > 0.5, ok2 > 0.5, ok3 > 0.5, ok4 > 0.5, ok5 > 0.5)
+
+f_rankAll(float gap) =>
+    int nSym = scR.size()
+    array<float> rL = array.new<float>(nSym, -1e10)
+    array<float> rS = array.new<float>(nSym, -1e10)
+    for k = 0 to nSym - 1
+        sv = scR.get(k)
+        tv = types.get(k)
+        if not na(sv) and not na(tv) and ownOk.get(k)
+            if tv == 1.0
+                rL.set(k, sv)
+            else if tv == -1.0
+                rS.set(k, sv)
+    array<int> iL = array.sort_indices(rL, order.descending)
+    array<int> iS = array.sort_indices(rS, order.descending)
+    int nTopC = math.min(nTop, nSym - 1)
+    float l3 = rL.get(iL.get(nTopC))
+    float s3 = rS.get(iS.get(nTopC))
+    array<bool> tA = array.new<bool>(nSym, false)
+    for r = 0 to nTopC - 1
+        kL0 = iL.get(r)
+        rL0 = rL.get(kL0)
+        if rL0 > -1e9 and (l3 <= -1e9 or rL0 - l3 >= gap)
+            tA.set(kL0, true)
+        kS0 = iS.get(r)
+        rS0 = rS.get(kS0)
+        if rS0 > -1e9 and (s3 <= -1e9 or rS0 - s3 >= gap)
+            tA.set(kS0, true)
+    [iL, iS, tA]
+
+[idxL, idxS, topArr] = f_rankAll(gapMin)
+
+bool ssNew = timeframe.change(ssTf)
+
+var array<int>   cntA  = array.new<int>(5, 0)
+var array<bool>  actA  = array.new<bool>(5, false)
+var array<float> entA  = array.new<float>(5, na)
+var array<int>   dirA  = array.new<int>(5, 0)
+var array<float> resMv = array.new<float>(5 * maxDiv, na)
+var array<bool>  resDb = array.new<bool>(5 * maxDiv, false)
+
+f_own(int k, int dn, float cur, int sg) =>
+    float sm = 0.0
+    float sq = 0.0
+    int   c  = 0
+    int   lo = math.max(1, dn - maxDiv + 1)
+    if dn - 1 >= lo
+        for j = lo to dn - 1
+            v = resMv.get(k * maxDiv + (j - 1) % maxDiv) * sg
+            if not na(v) and (not dblPosOnly or v > 0)
+                sm += v
+                sq += v * v
+                c  += 1
+    float mean = c > 0 ? sm / c : na
+    float sd   = c > 1 ? math.sqrt(math.max(sq / c - mean * mean, 0.0)) : 0.0
+    float cs   = cur * sg
+    bool ok    = c >= minPrev and not na(cs) and cs > mean + zMin * sd and cs > 0
+    [ok, mean]
+
+f_upd(int k, float cl) =>
+    ent = entA.get(k)
+    mv  = (cl / ent - 1.0) * 100.0
+    dn  = cntA.get(k)
+    ii  = k * maxDiv + (dn - 1) % maxDiv
+    resMv.set(ii, mv)
+    int sgU = dirA.get(k) == -1 ? -1 : 1
+    [okOwn, _m] = f_own(k, dn, mv, sgU)
+    if okOwn and not resDb.get(ii)
+        resDb.set(ii, true)
+    mv
+
+f_sc(int k) =>
+    int   dnA = cntA.get(k)
+    int   lo  = math.max(1, dnA - maxDiv + 1)
+    float up  = 0.0
+    float dw  = 0.0
+    int   h   = 0
+    if dnA >= lo
+        for j = lo to dnA
+            v = resMv.get(k * maxDiv + (j - 1) % maxDiv)
+            if not na(v) and v != 0.0
+                h += 1
+                if v > 0
+                    up += v
+                else
+                    dw += -v
+    [up, dw, h]
+
+f_lock(int k) =>
+    [sL, sS, hh] = f_sc(k)
+    int r = 0
+    if hh > 0
+        tot  = sL + sS
+        shL  = tot > 0 ? sL / tot * 100.0 : 0.0
+        shS  = tot > 0 ? sS / tot * 100.0 : 0.0
+        r := (sL > sS and sL > minScore and shL >= minShare) ? 1 : ((sS > sL and sS > minScore and shS >= minShare) ? -1 : 2)
+    r
+
+f_lastDbl(int k) =>
+    int n = cntA.get(k)
+    n > 0 ? resDb.get(k * maxDiv + (n - 1) % maxDiv) : false
+
+f_blockA() =>
+    for k = 0 to 4
+        cl     = cls.get(k)
+        isTop  = topArr.get(k)
+        wasAct = actA.get(k)
+        tyNow  = types.get(k)
+        int dirNow = na(tyNow) ? 0 : (tyNow == 1.0 ? 1 : (tyNow == -1.0 ? -1 : 0))
+        if wasAct and isTop and dirNow != 0 and dirA.get(k) != dirNow
+            if not na(cl)
+                f_upd(k, cl)
+            actA.set(k, false)
+            wasAct := false
+        if isTop
+            if not wasAct and not na(cl)
+                n  = cntA.get(k) + 1
+                ty = types.get(k)
+                cntA.set(k, n)
+                actA.set(k, true)
+                entA.set(k, cl)
+                dirA.set(k, ty == 1.0 ? 1 : -1)
+                resDb.set(k * maxDiv + (n - 1) % maxDiv, false)
+                f_upd(k, cl)
+            else if wasAct and not na(cl)
+                f_upd(k, cl)
+        else if wasAct
+            if not na(cl)
+                f_upd(k, cl)
+            actA.set(k, false)
+    0
+
+if barstate.isconfirmed and ssNew
+    f_blockA()
+
+f_elig(bool needD) =>
+    array<bool> eA = array.new<bool>(5, false)
+    array<int>  tR = array.new<int>(5, 0)
+    for k = 0 to 4
+        tyK = types.get(k)
+        dK  = tyK == 1.0 ? 1 : (tyK == -1.0 ? -1 : 0)
+        if dK != 0 and (dK == 1 ? allowL : allowS) and topArr.get(k) and actA.get(k) and cntA.get(k) >= tradeMinN and (not needD or f_lastDbl(k)) and f_lock(k) == dK
+            eA.set(k, true)
+    for r = 0 to maxLongSlots - 1
+        kLr = idxL.get(r)
+        if eA.get(kLr) and types.get(kLr) == 1.0
+            tR.set(kLr, r + 1)
+        kSr = idxS.get(r)
+        if eA.get(kSr) and types.get(kSr) == -1.0
+            tR.set(kSr, r + 1)
+    [eA, tR]
+
+[eligA, tRank]   = f_elig(needDbl)
+[eligB, tRankB]  = f_elig(false)
+
+f_curMv(int k) => cntA.get(k) > 0 ? resMv.get(k * maxDiv + (cntA.get(k) - 1) % maxDiv) : na
+
+plot(cl1, "CL_1")
+plot(cl2, "CL_2")
+plot(cl3, "CL_3")
+plot(cl4, "CL_4")
+plot(cl5, "CL_5")
+plot(ty1, "TY_1")
+plot(ty2, "TY_2")
+plot(ty3, "TY_3")
+plot(ty4, "TY_4")
+plot(ty5, "TY_5")
+plot(topArr.get(0) ? 1 : 0, "TOP_1")
+plot(topArr.get(1) ? 1 : 0, "TOP_2")
+plot(topArr.get(2) ? 1 : 0, "TOP_3")
+plot(topArr.get(3) ? 1 : 0, "TOP_4")
+plot(topArr.get(4) ? 1 : 0, "TOP_5")
+plot(idxL.get(0), "IL_0")
+plot(idxL.get(1), "IL_1")
+plot(idxL.get(2), "IL_2")
+plot(idxL.get(3), "IL_3")
+plot(idxS.get(0), "IS_0")
+plot(idxS.get(1), "IS_1")
+plot(idxS.get(2), "IS_2")
+plot(idxS.get(3), "IS_3")
+plot(cntA.get(0), "CNT_1")
+plot(cntA.get(1), "CNT_2")
+plot(cntA.get(2), "CNT_3")
+plot(cntA.get(3), "CNT_4")
+plot(cntA.get(4), "CNT_5")
+plot(actA.get(0) ? 1 : 0, "ACT_1")
+plot(actA.get(1) ? 1 : 0, "ACT_2")
+plot(actA.get(2) ? 1 : 0, "ACT_3")
+plot(actA.get(3) ? 1 : 0, "ACT_4")
+plot(actA.get(4) ? 1 : 0, "ACT_5")
+plot(f_curMv(0), "MV_1")
+plot(f_curMv(1), "MV_2")
+plot(f_curMv(2), "MV_3")
+plot(f_curMv(3), "MV_4")
+plot(f_curMv(4), "MV_5")
+plot(f_lastDbl(0) ? 1 : 0, "DBL_1")
+plot(f_lastDbl(1) ? 1 : 0, "DBL_2")
+plot(f_lastDbl(2) ? 1 : 0, "DBL_3")
+plot(f_lastDbl(3) ? 1 : 0, "DBL_4")
+plot(f_lastDbl(4) ? 1 : 0, "DBL_5")
+plot(f_lock(0), "LCK_1")
+plot(f_lock(1), "LCK_2")
+plot(f_lock(2), "LCK_3")
+plot(f_lock(3), "LCK_4")
+plot(f_lock(4), "LCK_5")
+plot(eligA.get(0) ? 1 : 0, "EL_1")
+plot(eligA.get(1) ? 1 : 0, "EL_2")
+plot(eligA.get(2) ? 1 : 0, "EL_3")
+plot(eligA.get(3) ? 1 : 0, "EL_4")
+plot(eligA.get(4) ? 1 : 0, "EL_5")
+plot(tRank.get(0), "TR_1")
+plot(tRank.get(1), "TR_2")
+plot(tRank.get(2), "TR_3")
+plot(tRank.get(3), "TR_4")
+plot(tRank.get(4), "TR_5")
+plot(eligB.get(0) ? 1 : 0, "ELB_1")
+plot(eligB.get(1) ? 1 : 0, "ELB_2")
+plot(eligB.get(2) ? 1 : 0, "ELB_3")
+plot(eligB.get(3) ? 1 : 0, "ELB_4")
+plot(eligB.get(4) ? 1 : 0, "ELB_5")

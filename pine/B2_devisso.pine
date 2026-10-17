@@ -1,0 +1,36 @@
+//@version=6
+// DEPV2 B2 — Devisso ratio, günlük TF (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_dayPack 643-665).
+// totalAmount (kapanış değişimlerinin % toplamı) → RSI(len) → ratio = |Δrsi / Δtotal|.
+// drB = bir önceki KAPANMIŞ günün ratio'su, drPr = drB'nin önceki drLook gündeki yüzdeliği (0 = en kolay).
+// GÜNLÜK (1D) grafikte çalıştırılmalıdır.
+indicator("DEPV2 B2 · DEVISSO RATIO", shorttitle = "B2", precision = 8)
+
+drRsiLen = input.int(3, "Devisso: RSI periyodu (totalAmount üzerinde)", minval = 2)
+drLook   = input.int(60, "Devisso: yüzdelik penceresi (gün)", minval = 10, maxval = 250)
+
+var float drTot = 0.0
+drTot := close > close[1] ? drTot + (close - close[1]) / close[1] * 100.0 : (close < close[1] ? drTot - (close[1] - close) / close * 100.0 : drTot)
+float drRsi = ta.rsi(drTot, drRsiLen)
+float drCh  = ta.change(drTot)
+float drRaw = ta.change(drRsi) / drCh
+var float drK = na
+if not na(drRaw) and drCh != 0.0
+    drK := math.abs(drRaw)
+float drB  = drK[1]
+float drLs = 0.0
+float drCn = 0.0
+for i = 2 to drLook + 1
+    float vv = drK[i]
+    if not na(vv) and not na(drB)
+        drCn += 1.0
+        if vv < drB
+            drLs += 1.0
+        else if vv == drB
+            drLs += 0.5
+float drPr = drCn >= 10.0 ? drLs / drCn * 100.0 : na
+
+plot(drTot, "DR_TOT")
+plot(drRsi, "DR_RSI")
+plot(drK,   "DR_K")
+plot(drB,   "DR_B")
+plot(drPr,  "DR_PR")

@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest>=8
+black
+isort
+pylint
+autoflake
+bandit

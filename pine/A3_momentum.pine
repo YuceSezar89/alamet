@@ -1,0 +1,25 @@
+//@version=6
+// DEPV2 A3 — ② MOMENTUM yöntemi (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_sym 513-526. satırlar)
+// Girdi: fiyatın zamana göre türevi. n barlık log getiri / (σ_1bar × √n) = z skoru.
+indicator("DEPV2 A3 · MOMENTUM", shorttitle = "A3", precision = 8)
+
+moLen  = input.int(12, "MOMENTUM: ROC periyodu (bar)", minval = 2)
+moZLen = input.int(48, "MOMENTUM: σ (getiri oynaklığı) penceresi", minval = 10)
+moThr  = input.float(1.0, "MOMENTUM: min. |z|", minval = 0.1, step = 0.1)
+
+float lr1  = math.log(close / close[1])
+float lrSd = ta.stdev(lr1, moZLen)
+float lrN  = math.log(close / close[moLen])
+float moZ  = (not na(lrSd) and lrSd > 0) ? lrN / (lrSd * math.sqrt(moLen)) : 0.0
+var int moSt = 0
+if moZ >= moThr
+    moSt := 1
+else if moZ <= -moThr
+    moSt := -1
+else if (moSt == 1 and moZ < 0) or (moSt == -1 and moZ > 0)
+    moSt := 0
+int strMo = math.abs(moZ) >= moThr * 3 ? 2 : (math.abs(moZ) >= moThr * 2 ? 1 : 0)
+
+plot(moZ,   "MO_Z")
+plot(moSt,  "MO_STATE")
+plot(strMo, "MO_STR")

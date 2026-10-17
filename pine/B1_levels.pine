@@ -1,0 +1,51 @@
+//@version=6
+// DEPV2 B1 — Haftalık / aylık / yıllık OHLC seviyeleri (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2,
+// f_per 617-637 ve f_dayPack'in ilk 18 değeri). Her periyot için: bu periyodun open/high/low'u (şimdiye kadar)
+// + önceki periyodun high/low/close'u. DEPV2 bunu request.security(sembol, "D", ...) ile günlük barlarda hesaplar;
+// bu yüzden bu gösterge GÜNLÜK (1D) grafikte çalıştırılmalıdır.
+indicator("DEPV2 B1 · SEVİYELER (W/M/Y)", shorttitle = "B1", precision = 8)
+
+f_per(string tf) =>
+    bool  nw  = timeframe.change(tf)
+    float pcl = close[1]
+    var float cO = na
+    var float cH = na
+    var float cL = na
+    var float pH = na
+    var float pL = na
+    var float pC = na
+    if nw or na(cO)
+        if not na(cO)
+            pH := cH
+            pL := cL
+            pC := pcl
+        cO := open
+        cH := high
+        cL := low
+    else
+        cH := math.max(cH, high)
+        cL := math.min(cL, low)
+    [cO, cH, cL, pH, pL, pC]
+
+[wO, wH, wL, wpH, wpL, wpC] = f_per("W")
+[mO, mH, mL, mpH, mpL, mpC] = f_per("M")
+[yO, yH, yL, ypH, ypL, ypC] = f_per("12M")
+
+plot(wO,  "WO")
+plot(wH,  "WH")
+plot(wL,  "WL")
+plot(wpH, "WPH")
+plot(wpL, "WPL")
+plot(wpC, "WPC")
+plot(mO,  "MO")
+plot(mH,  "MH")
+plot(mL,  "ML")
+plot(mpH, "MPH")
+plot(mpL, "MPL")
+plot(mpC, "MPC")
+plot(yO,  "YO")
+plot(yH,  "YH")
+plot(yL,  "YL")
+plot(ypH, "YPH")
+plot(ypL, "YPL")
+plot(ypC, "YPC")

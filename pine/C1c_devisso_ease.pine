@@ -1,0 +1,115 @@
+//@version=6
+// DEPV2 C1c — Devisso kolaylık puanı (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_drXsAll 742-758,
+// f_drPr 763-773 ve f_tgtAll 1146-1149). 5 sembolün günlük Devisso ratio'su (bir önceki kapanmış gün) ve kendi
+// geçmişindeki yüzdeliği request.security(sembol, "D", ...) ile gelir. Emtialar arası yüzdelik: bugünkü ratio'nun
+// sembol grubu içindeki sırası (0 = en küçük = en kolay). Kolaylık puanı = ağırlık × (1 - birleşik yüzdelik / 100).
+// 15 dk grafikte çalıştırılmalıdır.
+indicator("DEPV2 C1c · DEVISSO KOLAYLIK", shorttitle = "C1c", precision = 8)
+
+t1 = input.symbol("BINANCE:BTCUSDT.P", "Symbol 1")
+t2 = input.symbol("BINANCE:ETHUSDT.P", "Symbol 2")
+t3 = input.symbol("BINANCE:SOLUSDT.P", "Symbol 3")
+t4 = input.symbol("BINANCE:BNBUSDT.P", "Symbol 4")
+t5 = input.symbol("BINANCE:XRPUSDT.P", "Symbol 5")
+
+drRsiLen  = input.int(3, "Devisso: RSI periyodu", minval = 2)
+drLook    = input.int(60, "Devisso: yüzdelik penceresi (gün)", minval = 10, maxval = 250)
+drSrc     = input.string("Karma", "Yüzdelik kaynağı", options = ["Kendi geçmişi", "Emtialar arası", "Karma"])
+drRankW   = input.float(1.0, "Kolaylık sıralama puanı (en kolay = +x skor, en zor = 0)", minval = 0.0, step = 0.1)
+
+f_dr() =>
+    var float drTot = 0.0
+    drTot := close > close[1] ? drTot + (close - close[1]) / close[1] * 100.0 : (close < close[1] ? drTot - (close[1] - close) / close * 100.0 : drTot)
+    float drRsi = ta.rsi(drTot, drRsiLen)
+    float drCh  = ta.change(drTot)
+    float drRaw = ta.change(drRsi) / drCh
+    var float drK = na
+    if not na(drRaw) and drCh != 0.0
+        drK := math.abs(drRaw)
+    float drB  = drK[1]
+    float drLs = 0.0
+    float drCn = 0.0
+    for i = 2 to drLook + 1
+        float vv = drK[i]
+        if not na(vv) and not na(drB)
+            drCn += 1.0
+            if vv < drB
+                drLs += 1.0
+            else if vv == drB
+                drLs += 0.5
+    float drPr = drCn >= 10.0 ? drLs / drCn * 100.0 : na
+    [drB, drPr]
+
+[b1, p1] = request.security(t1, "D", f_dr())
+[b2, p2] = request.security(t2, "D", f_dr())
+[b3, p3] = request.security(t3, "D", f_dr())
+[b4, p4] = request.security(t4, "D", f_dr())
+[b5, p5] = request.security(t5, "D", f_dr())
+
+ratios = array.from(b1, b2, b3, b4, b5)
+owns   = array.from(p1, p2, p3, p4, p5)
+
+f_xs(array<float> r) =>
+    int nSym = r.size()
+    array<float> o = array.new<float>(nSym, na)
+    int n = 0
+    for k = 0 to nSym - 1
+        if not na(r.get(k))
+            n += 1
+    if n >= 3
+        for k = 0 to nSym - 1
+            float rk0 = r.get(k)
+            if not na(rk0)
+                float ls = 0.0
+                for j = 0 to nSym - 1
+                    float rj = r.get(j)
+                    if j != k and not na(rj)
+                        ls += rj < rk0 ? 1.0 : (rj == rk0 ? 0.5 : 0.0)
+                o.set(k, ls / (n - 1) * 100.0)
+    o
+
+f_comb(float own, float xs) =>
+    float r = na
+    if drSrc == "Kendi geçmişi"
+        r := na(own) ? xs : own
+    else if drSrc == "Emtialar arası"
+        r := na(xs) ? own : xs
+    else
+        r := (not na(own) and not na(xs)) ? (own + xs) / 2.0 : (na(own) ? xs : own)
+    r
+
+xsA = f_xs(ratios)
+
+float pr1 = f_comb(owns.get(0), xsA.get(0))
+float pr2 = f_comb(owns.get(1), xsA.get(1))
+float pr3 = f_comb(owns.get(2), xsA.get(2))
+float pr4 = f_comb(owns.get(3), xsA.get(3))
+float pr5 = f_comb(owns.get(4), xsA.get(4))
+
+f_bon(float pr) => na(pr) ? na : drRankW * (1.0 - pr / 100.0)
+
+plot(b1, "DRB_1")
+plot(b2, "DRB_2")
+plot(b3, "DRB_3")
+plot(b4, "DRB_4")
+plot(b5, "DRB_5")
+plot(p1, "DRPO_1")
+plot(p2, "DRPO_2")
+plot(p3, "DRPO_3")
+plot(p4, "DRPO_4")
+plot(p5, "DRPO_5")
+plot(xsA.get(0), "XS_1")
+plot(xsA.get(1), "XS_2")
+plot(xsA.get(2), "XS_3")
+plot(xsA.get(3), "XS_4")
+plot(xsA.get(4), "XS_5")
+plot(pr1, "PR_1")
+plot(pr2, "PR_2")
+plot(pr3, "PR_3")
+plot(pr4, "PR_4")
+plot(pr5, "PR_5")
+plot(f_bon(pr1), "BON_1")
+plot(f_bon(pr2), "BON_2")
+plot(f_bon(pr3), "BON_3")
+plot(f_bon(pr4), "BON_4")
+plot(f_bon(pr5), "BON_5")

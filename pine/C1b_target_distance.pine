@@ -1,0 +1,104 @@
+//@version=6
+// DEPV2 C1b — Hedef mesafesi (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_near 984-993 ve f_tgtD 996-1011).
+// Yönündeki en yakın HTF OHLC seviyesine olan mesafe (ATR cinsinden). LONG için fiyatın üstündeki, SHORT için altındaki
+// en yakın seviye. Yakın = 18 seviyenin hepsi; büyük = aylık + yıllık (kolon 6-17).
+// Seviyeler DEPV2'deki gibi request.security(sembol, "D", ...) ile gelir; 18 seviye aynı zamanda plot edilir.
+// 15 dk grafikte çalıştırılmalıdır.
+indicator("DEPV2 C1b · HEDEF MESAFESİ", shorttitle = "C1b", precision = 8)
+
+atrPeriod = input.int(10, "ATR Length (atrPeriod)", minval = 1)
+
+f_per(string tf) =>
+    bool  nw  = timeframe.change(tf)
+    float pcl = close[1]
+    var float cO = na
+    var float cH = na
+    var float cL = na
+    var float pH = na
+    var float pL = na
+    var float pC = na
+    if nw or na(cO)
+        if not na(cO)
+            pH := cH
+            pL := cL
+            pC := pcl
+        cO := open
+        cH := high
+        cL := low
+    else
+        cH := math.max(cH, high)
+        cL := math.min(cL, low)
+    [cO, cH, cL, pH, pL, pC]
+
+f_levelPack() =>
+    [wO, wH, wL, wpH, wpL, wpC] = f_per("W")
+    [mO, mH, mL, mpH, mpL, mpC] = f_per("M")
+    [yO, yH, yL, ypH, ypL, ypC] = f_per("12M")
+    array.from(wO, wH, wL, wpH, wpL, wpC, mO, mH, mL, mpH, mpL, mpC, yO, yH, yL, ypH, ypL, ypC)
+
+f_okArr(array<float> a, int n) => (not na(a) and a.size() == n) ? a : array.new<float>(n, na)
+
+lv = f_okArr(request.security(syminfo.tickerid, "D", f_levelPack()), 18)
+
+atrV = ta.atr(atrPeriod)
+
+f_near(int i0, int i1, float px, bool up) =>
+    float best = na
+    for i = i0 to i1
+        v = lv.get(i)
+        if not na(v)
+            if up and v > px and (na(best) or v < best)
+                best := v
+            else if (not up) and v < px and (na(best) or v > best)
+                best := v
+    best
+
+f_tgtN(bool up) =>
+    float nV = f_near(0, 17, close, up)
+    float res = na
+    if not na(close) and not na(atrV) and atrV > 0 and not na(nV)
+        res := math.abs(nV - close) / atrV
+    res
+
+f_tgtB(bool up) =>
+    float bV = f_near(6, 17, close, up)
+    float res = na
+    if not na(close) and not na(atrV) and atrV > 0 and not na(bV)
+        res := math.abs(bV - close) / atrV
+    res
+
+f_tgtD(float dN, float dB) =>
+    float res = na
+    if not na(close) and not na(atrV) and atrV > 0
+        res := (not na(dN) and not na(dB)) ? (dN + dB) / 2.0 : (na(dB) ? dN : dB)
+    res
+
+float dnUp = f_tgtN(true)
+float dbUp = f_tgtB(true)
+float dnDn = f_tgtN(false)
+float dbDn = f_tgtB(false)
+
+plot(lv.get(0),  "WO")
+plot(lv.get(1),  "WH")
+plot(lv.get(2),  "WL")
+plot(lv.get(3),  "WPH")
+plot(lv.get(4),  "WPL")
+plot(lv.get(5),  "WPC")
+plot(lv.get(6),  "MO")
+plot(lv.get(7),  "MH")
+plot(lv.get(8),  "ML")
+plot(lv.get(9),  "MPH")
+plot(lv.get(10), "MPL")
+plot(lv.get(11), "MPC")
+plot(lv.get(12), "YO")
+plot(lv.get(13), "YH")
+plot(lv.get(14), "YL")
+plot(lv.get(15), "YPH")
+plot(lv.get(16), "YPL")
+plot(lv.get(17), "YPC")
+plot(dnUp, "DN_UP")
+plot(dbUp, "DB_UP")
+plot(f_tgtD(dnUp, dbUp), "TD_UP")
+plot(dnDn, "DN_DN")
+plot(dbDn, "DB_DN")
+plot(f_tgtD(dnDn, dbDn), "TD_DN")

@@ -1,0 +1,76 @@
+//@version=6
+// DEPV2 P1 — array.sort_indices(order.descending) eşitlik davranışı sondası.
+// DEPV2 sıralamada ve havuzda array.sort_indices kullanır; eşit değerlerde hangi indeksin önce geleceği
+// belgelenmemiştir. Bu gösterge her barda tekrarlı değerlerden (az sayıda farklı değer + nöbetçi -1e10)
+// deterministik diziler üretir, Pine'ın sıralamasını plot eder; Python kuralı veriden çıkarır.
+// 5 ve 20 elemanlı dizilerle denenir (DEPV2 20 eleman kullanır). Herhangi bir grafikte çalıştırılabilir.
+indicator("DEPV2 P1 · SIRALAMA SONDASI", shorttitle = "P1", precision = 8)
+
+nv = input.int(4, "Farklı değer sayısı (küçük = çok eşitlik)", minval = 2, maxval = 10)
+
+f_hash(int i, int k) =>
+    math.abs(math.sin(i * 12.9898 + k * 78.233)) * 43758.5453 % 1.0
+
+f_arr(int n, int salt) =>
+    array<float> a = array.new<float>(n, 0.0)
+    for k = 0 to n - 1
+        float h1 = f_hash(bar_index + salt, k)
+        float h2 = f_hash(bar_index + salt + 7919, k)
+        a.set(k, h2 < 0.3 ? -1e10 : math.floor(h1 * nv))
+    a
+
+a5  = f_arr(5, 0)
+a20 = f_arr(20, 100000)
+s5  = array.sort_indices(a5, order.descending)
+s20 = array.sort_indices(a20, order.descending)
+
+plot(a5.get(0), "A5_0")
+plot(a5.get(1), "A5_1")
+plot(a5.get(2), "A5_2")
+plot(a5.get(3), "A5_3")
+plot(a5.get(4), "A5_4")
+plot(s5.get(0), "S5_0")
+plot(s5.get(1), "S5_1")
+plot(s5.get(2), "S5_2")
+plot(s5.get(3), "S5_3")
+plot(s5.get(4), "S5_4")
+plot(a20.get(0),  "A20_0")
+plot(a20.get(1),  "A20_1")
+plot(a20.get(2),  "A20_2")
+plot(a20.get(3),  "A20_3")
+plot(a20.get(4),  "A20_4")
+plot(a20.get(5),  "A20_5")
+plot(a20.get(6),  "A20_6")
+plot(a20.get(7),  "A20_7")
+plot(a20.get(8),  "A20_8")
+plot(a20.get(9),  "A20_9")
+plot(a20.get(10), "A20_10")
+plot(a20.get(11), "A20_11")
+plot(a20.get(12), "A20_12")
+plot(a20.get(13), "A20_13")
+plot(a20.get(14), "A20_14")
+plot(a20.get(15), "A20_15")
+plot(a20.get(16), "A20_16")
+plot(a20.get(17), "A20_17")
+plot(a20.get(18), "A20_18")
+plot(a20.get(19), "A20_19")
+plot(s20.get(0),  "S20_0")
+plot(s20.get(1),  "S20_1")
+plot(s20.get(2),  "S20_2")
+plot(s20.get(3),  "S20_3")
+plot(s20.get(4),  "S20_4")
+plot(s20.get(5),  "S20_5")
+plot(s20.get(6),  "S20_6")
+plot(s20.get(7),  "S20_7")
+plot(s20.get(8),  "S20_8")
+plot(s20.get(9),  "S20_9")
+plot(s20.get(10), "S20_10")
+plot(s20.get(11), "S20_11")
+plot(s20.get(12), "S20_12")
+plot(s20.get(13), "S20_13")
+plot(s20.get(14), "S20_14")
+plot(s20.get(15), "S20_15")
+plot(s20.get(16), "S20_16")
+plot(s20.get(17), "S20_17")
+plot(s20.get(18), "S20_18")
+plot(s20.get(19), "S20_19")

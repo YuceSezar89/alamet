@@ -1,0 +1,116 @@
+//@version=6
+// DEPV2 C2 — Yön bazlı sıralama + ilk N (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_rankAll 1187-1215).
+// Havuz KAPALI doğrulanır (poolA hep true). Sıralama saf bir fonksiyondur: girdi = sembol başına skor, yön, kendi-içi kapı.
+// Bu testte girdiler 5 sembolün fiyatından basit ve deterministik biçimde üretilir ve plot edilir
+// (üretim hattı A/B/C1/C3'te ayrıca doğrulandı). Sembol 5 bilerek Sembol 1 ile aynıdır: eşit skorlarda
+// array.sort_indices sırasını ölçmek için. 15 dk grafikte çalıştırılmalıdır.
+indicator("DEPV2 C2 · SIRALAMA", shorttitle = "C2", precision = 8)
+
+t1 = input.symbol("BINANCE:BTCUSDT.P", "Symbol 1")
+t2 = input.symbol("BINANCE:ETHUSDT.P", "Symbol 2")
+t3 = input.symbol("BINANCE:SOLUSDT.P", "Symbol 3")
+t4 = input.symbol("BINANCE:BNBUSDT.P", "Symbol 4")
+t5 = input.symbol("BINANCE:BTCUSDT.P", "Symbol 5 (eşitlik sondası: Symbol 1 ile aynı bırak)")
+
+ssTf    = input.timeframe("15", "Sinyal zaman dilimi (ssTf)")
+nTop    = input.int(2, "Market'ten ilk N hedef", minval = 1, maxval = 4)
+gapMin  = input.float(0.0, "Ayrışma için (N+1). sıradan min. fark (skor birimi)", minval = 0.0, step = 0.1)
+gapMinB = input.float(0.5, "Ek senaryo: ikinci min. fark değeri", minval = 0.0, step = 0.1)
+
+f_in() =>
+    float r  = math.log(close / close[12]) * 100.0
+    float aP = ta.atr(10) / close * 100.0
+    float ty = na(r) ? na : (r > 0.15 ? 1.0 : (r < -0.15 ? -1.0 : 0.0))
+    float sc = (na(ty) or ty == 0.0 or na(aP) or aP <= 0) ? na : ty * r / aP
+    float okv = ta.rsi(close, 14) > 40 ? 1.0 : 0.0
+    [ty, sc, okv]
+
+[ty1, sc1, ok1] = request.security(t1, ssTf, f_in())
+[ty2, sc2, ok2] = request.security(t2, ssTf, f_in())
+[ty3, sc3, ok3] = request.security(t3, ssTf, f_in())
+[ty4, sc4, ok4] = request.security(t4, ssTf, f_in())
+[ty5, sc5, ok5] = request.security(t5, ssTf, f_in())
+
+scR   = array.from(sc1, sc2, sc3, sc4, sc5)
+types = array.from(ty1, ty2, ty3, ty4, ty5)
+ownOk = array.from(ok1 > 0.5, ok2 > 0.5, ok3 > 0.5, ok4 > 0.5, ok5 > 0.5)
+
+f_rankAll(float gap) =>
+    int nSym = scR.size()
+    array<float> rL = array.new<float>(nSym, -1e10)
+    array<float> rS = array.new<float>(nSym, -1e10)
+    for k = 0 to nSym - 1
+        sv = scR.get(k)
+        tv = types.get(k)
+        if not na(sv) and not na(tv) and ownOk.get(k)
+            if tv == 1.0
+                rL.set(k, sv)
+            else if tv == -1.0
+                rS.set(k, sv)
+    array<int> iL = array.sort_indices(rL, order.descending)
+    array<int> iS = array.sort_indices(rS, order.descending)
+    int nTopC = math.min(nTop, nSym - 1)
+    float l3 = rL.get(iL.get(nTopC))
+    float s3 = rS.get(iS.get(nTopC))
+    array<bool> tA = array.new<bool>(nSym, false)
+    for r = 0 to nTopC - 1
+        kL0 = iL.get(r)
+        rL0 = rL.get(kL0)
+        if rL0 > -1e9 and (l3 <= -1e9 or rL0 - l3 >= gap)
+            tA.set(kL0, true)
+        kS0 = iS.get(r)
+        rS0 = rS.get(kS0)
+        if rS0 > -1e9 and (s3 <= -1e9 or rS0 - s3 >= gap)
+            tA.set(kS0, true)
+    [rL, rS, iL, iS, l3, s3, tA]
+
+[rkL, rkS, idxL, idxS, lv3, sv3, topArr] = f_rankAll(gapMin)
+[rkL2, rkS2, idxL2, idxS2, lv32, sv32, topArr2] = f_rankAll(gapMinB)
+
+plot(ty1, "TY_1")
+plot(ty2, "TY_2")
+plot(ty3, "TY_3")
+plot(ty4, "TY_4")
+plot(ty5, "TY_5")
+plot(sc1, "SC_1")
+plot(sc2, "SC_2")
+plot(sc3, "SC_3")
+plot(sc4, "SC_4")
+plot(sc5, "SC_5")
+plot(ok1, "OK_1")
+plot(ok2, "OK_2")
+plot(ok3, "OK_3")
+plot(ok4, "OK_4")
+plot(ok5, "OK_5")
+plot(rkL.get(0), "RL_1")
+plot(rkL.get(1), "RL_2")
+plot(rkL.get(2), "RL_3")
+plot(rkL.get(3), "RL_4")
+plot(rkL.get(4), "RL_5")
+plot(rkS.get(0), "RS_1")
+plot(rkS.get(1), "RS_2")
+plot(rkS.get(2), "RS_3")
+plot(rkS.get(3), "RS_4")
+plot(rkS.get(4), "RS_5")
+plot(idxL.get(0), "IL_0")
+plot(idxL.get(1), "IL_1")
+plot(idxL.get(2), "IL_2")
+plot(idxL.get(3), "IL_3")
+plot(idxL.get(4), "IL_4")
+plot(idxS.get(0), "IS_0")
+plot(idxS.get(1), "IS_1")
+plot(idxS.get(2), "IS_2")
+plot(idxS.get(3), "IS_3")
+plot(idxS.get(4), "IS_4")
+plot(lv3, "L3")
+plot(sv3, "S3")
+plot(topArr.get(0) ? 1 : 0, "TOP_1")
+plot(topArr.get(1) ? 1 : 0, "TOP_2")
+plot(topArr.get(2) ? 1 : 0, "TOP_3")
+plot(topArr.get(3) ? 1 : 0, "TOP_4")
+plot(topArr.get(4) ? 1 : 0, "TOP_5")
+plot(topArr2.get(0) ? 1 : 0, "TOPB_1")
+plot(topArr2.get(1) ? 1 : 0, "TOPB_2")
+plot(topArr2.get(2) ? 1 : 0, "TOPB_3")
+plot(topArr2.get(3) ? 1 : 0, "TOPB_4")
+plot(topArr2.get(4) ? 1 : 0, "TOPB_5")

@@ -1,0 +1,52 @@
+//@version=6
+// DEPV2 A6 — MTF Heikin Ashi gücü, tek zaman dilimi başına (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2,
+// f_haScore 376-401. satırlar). HTF mumları sinyal TF barlarından birleştirilir, HA hesaplanır → skor (-100..+100).
+// Dört katın (2/3/4/6 × sinyal TF) skoru ayrı ayrı çizilir. Grafik periyodu sinyal TF'si (15 dk) olmalı.
+indicator("DEPV2 A6 · MTF HA GÜCÜ", shorttitle = "A6", precision = 8)
+
+ssTf = input.timeframe("15", "Sinyal zaman dilimi (ssTf)")
+vpM1 = input.int(2, "MTF 1 çarpanı", minval = 2)
+vpM2 = input.int(3, "MTF 2 çarpanı", minval = 2)
+vpM3 = input.int(4, "MTF 3 çarpanı", minval = 2)
+vpM4 = input.int(6, "MTF 4 çarpanı", minval = 2)
+
+string tfM1 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM1)
+string tfM2 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM2)
+string tfM3 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM3)
+string tfM4 = timeframe.from_seconds(timeframe.in_seconds(ssTf) * vpM4)
+
+f_haScore(string tf) =>
+    bool nw = timeframe.change(tf)
+    var float cO = na
+    var float cH = na
+    var float cL = na
+    var float pHaO = na
+    var float pHaC = na
+    if nw or na(cO)
+        if not na(cO)
+            float lastC = (cO + cH + cL + close[1]) / 4.0
+            float lastO = na(pHaO) ? (cO + close[1]) / 2.0 : (pHaO + pHaC) / 2.0
+            pHaO := lastO
+            pHaC := lastC
+        cO := open
+        cH := high
+        cL := low
+    else
+        cH := math.max(cH, high)
+        cL := math.min(cL, low)
+    float haC = (cO + cH + cL + close) / 4.0
+    float haO = na(pHaO) ? (cO + close) / 2.0 : (pHaO + pHaC) / 2.0
+    float haH = math.max(cH, math.max(haO, haC))
+    float haL = math.min(cL, math.min(haO, haC))
+    float rg  = haH - haL
+    rg != 0 ? (haC - haO) / rg * 100.0 : 0.0
+
+float hs1 = f_haScore(tfM1)
+float hs2 = f_haScore(tfM2)
+float hs3 = f_haScore(tfM3)
+float hs4 = f_haScore(tfM4)
+
+plot(hs1, "HS_1")
+plot(hs2, "HS_2")
+plot(hs3, "HS_3")
+plot(hs4, "HS_4")

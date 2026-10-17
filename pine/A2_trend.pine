@@ -1,0 +1,24 @@
+//@version=6
+// DEPV2 A2 — ① TREND yöntemi (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_sym 500-511. satırlar)
+// Girdi: fiyat seviyesi. (HLC3 - SMA) / ATR = seviye skoru. Durum makinesi + güç kodu.
+indicator("DEPV2 A2 · TREND", shorttitle = "A2", precision = 8)
+
+atrLen = input.int(10, "ATR Length (atrPeriod)", minval = 1)
+tdLen  = input.int(24, "TREND: seviye ortalaması periyodu (HLC3 SMA)", minval = 3)
+tdThr  = input.float(0.5, "TREND: min. seviye skoru (ATR cinsinden uzaklık)", minval = 0.05, step = 0.05)
+
+atrV = ta.atr(atrLen)
+float tdMa = ta.sma(hlc3, tdLen)
+float tdZ  = atrV > 0 ? (close - tdMa) / atrV : 0.0
+var int tdSt = 0
+if tdZ >= tdThr
+    tdSt := 1
+else if tdZ <= -tdThr
+    tdSt := -1
+else if (tdSt == 1 and tdZ < 0) or (tdSt == -1 and tdZ > 0)
+    tdSt := 0
+int strTd = math.abs(tdZ) >= tdThr * 3 ? 2 : (math.abs(tdZ) >= tdThr * 2 ? 1 : 0)
+
+plot(tdZ,  "TD_Z")
+plot(tdSt, "TD_STATE")
+plot(strTd, "TD_STR")

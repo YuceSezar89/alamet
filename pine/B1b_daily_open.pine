@@ -1,0 +1,16 @@
+//@version=6
+// DEPV2 B1b — Günlük open (kaynak: Devis'So Otomatik Bot Eğitim PaneliV2, f_sym 574-580).
+// Günün (UTC, dOpenHr=0 ise borsa günü) ilk barının açılışı. Giriş filtresi (LONG için fiyat > günlük open)
+// ve öğrenme motoru "günlük open yönü" kovası bunu kullanır. 15 dk grafikte çalıştırılır.
+indicator("DEPV2 B1b · GÜNLÜK OPEN", shorttitle = "B1b", precision = 8)
+
+dHr = input.int(0, "Günlük open saati (UTC, 0 = borsa günü)", minval = 0, maxval = 23)
+
+var float dOpen = na
+bool chD   = timeframe.change("D")
+bool hrChg = hour(time, "UTC") == dHr and hour(time[1], "UTC") != dHr
+bool newDay = dHr == 0 ? chD : hrChg
+if newDay or na(dOpen)
+    dOpen := open
+
+plot(dOpen, "DOPEN")
