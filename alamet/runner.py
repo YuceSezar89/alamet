@@ -207,6 +207,20 @@ async def run_until_signal(runner: Runner) -> None:
         runner.log("Durduruldu (sinyal): son kayıt tutarlı.")
 
 
+def build_trader(runner: "Runner", infos, args):
+    """`--trade` seçeneğinden yürütücü: dry = kayıt var borsa yok; demo/live = gerçek emir."""
+    from alamet.executor import Executor, Safety  # pylint: disable=import-outside-toplevel
+    from alamet.futures_api import FuturesClient  # pylint: disable=import-outside-toplevel
+    from alamet.orders import OrderRules, RiskLimits  # pylint: disable=import-outside-toplevel
+
+    only = frozenset(b.strip().upper() for b in args.only.split(",") if b.strip()) or None
+    limits = RiskLimits(args.scale, args.max_position, args.max_total, allowed=only)
+    safety = Safety(args.daily_loss, args.max_orders, args.trade == "dry", Path(args.halt_file))
+    api = None if args.trade == "dry" else FuturesClient(args.trade)
+    rules = {info.base: OrderRules.from_info(info) for info in infos}
+    return Executor(api, runner.store, runner.symbols, rules, limits, safety, runner.log)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Alamet canlı yürütücü (gölge çalışma: emir yok)")
     parser.add_argument("--universe", required=True)
@@ -216,14 +230,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--profile", default="orijinal", help="orijinal ya da S0..S50")
     parser.add_argument("--anchor", default=DEFAULT_ANCHOR, help="çapa tarihi (UTC)")
     parser.add_argument("--daily-mode", choices=("live", "history"), default="live")
+    parser.add_argument(
+        "--trade",
+        choices=("off", "dry", "demo", "live"),
+        default="off",
+        help="off: emir yok · dry: kuru çalışma (kayıt var, borsa yok) · demo/live: gerçek emir",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=5000.0 / 949.48,
+        help="sanal büyüklük × ölçek = gerçek USDT (varsayılan: 5000 / sanal kasa)",
+    )
+    parser.add_argument(
+        "--max-position", type=float, default=2000.0, help="tek pozisyon USDT tavanı"
+    )
+    parser.add_argument("--max-total", type=float, default=10000.0, help="toplam açık USDT tavanı")
+    parser.add_argument("--daily-loss", type=float, default=None, help="günlük kayıp tavanı (USDT)")
+    parser.add_argument("--max-orders", type=int, default=None, help="günlük emir sayısı sınırı")
+    parser.add_argument("--only", default="", help="yalnızca bu taban adlar, virgülle (ör. BTC)")
+    parser.add_argument("--halt-file", default="data/HALT", help="varsa yeni açılış yapılmaz")
     args = parser.parse_args(argv)
     from alamet.binance_data import to_ms  # pylint: disable=import-outside-toplevel
 
     tf = from_interval(args.tf)
     panel, trade = profile_params(args.profile)
+    infos = load_snapshot(Path(args.universe))
     runner = Runner(
         Path(args.root) if args.root else default_root(tf),
-        bases(load_snapshot(Path(args.universe))),
+        bases(infos),
         tf,
         Path(args.db),
         panel,
@@ -231,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         to_ms(args.anchor),
         args.daily_mode,
     )
+    if args.trade != "off":
+        runner.trader = build_trader(runner, infos, args)
     asyncio.run(run_until_signal(runner))
     return 0
 
