@@ -40,15 +40,17 @@ from alamet.daily import (
     map_to_bars,
     window_daily,
 )
+from alamet.overrides import params_with
 from alamet.panel import PanelParams, build_panel
 from alamet.score import cross_percentile
-from alamet.stages import SIGNAL_STAGES, STAGES, panel_params, stage_params, with_signal_tf
+from alamet.stages import SIGNAL_STAGES, STAGES, panel_params, with_signal_tf
 from alamet.system import run_system
 from alamet.timeframe import SignalTf
 from alamet.universe import SYMBOLS, Universe, load_universe
 from alamet.verify import ColumnReport, compare_column, load_tv_csv
 
 CALC_BARS = 4000
+OVERRIDES: list[str] = []
 DAY_STAGE = "DAY"
 DAILY_FROM = 8
 SIGNAL_NEEDS_DAILY = {"SIGT", "SIGD", DAY_STAGE}
@@ -136,8 +138,7 @@ def _signal_reports(ctx: Context, stage: str) -> list[ColumnReport]:
 
 
 def _trade_reports(ctx: Context, stage: str) -> tuple[list[ColumnReport], object]:
-    panel_p, trade_p = stage_params(stage)
-    panel_p = with_signal_tf(panel_p, ctx.universe.bar_seconds)
+    panel_p, trade_p = params_with(stage, OVERRIDES, ctx.universe.bar_seconds)
     result = run_system(
         ctx.universe, panel_p, trade_p, ctx.confirm_last, start=ctx.start, day=ctx.day
     )
@@ -235,7 +236,7 @@ def _prepare(args: argparse.Namespace) -> Context:
         daily: DailyUniverse = window_daily(
             source, universe.time[start], csv_last, CALC_BARS, tf.seconds
         )
-        params = stage_params(args.stage)[0] if args.stage in STAGES else PanelParams()
+        params = params_with(args.stage, OVERRIDES)[0] if args.stage in STAGES else PanelParams()
         pack = daily_pack(daily, params.dr_rsi_len, params.dr_look)
         ctx.mapped = map_to_bars(pack, daily.time, universe.time, tf_seconds=tf.seconds)
         ctx.day = day_inputs(ctx.mapped)
@@ -292,7 +293,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--daily", nargs=2, metavar=("DAILY1", "DAILY2"))
     parser.add_argument("--state-window", type=int, default=0)
     parser.add_argument("--block", type=int, default=0, help="çok göstergeli CSV'de blok no (0..)")
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="YOL=DEĞER",
+        help="ayar geçersiz kılma, örn. trade.use_tp=true panel.n_top=3 (çoklu kullanılabilir)",
+    )
     args = parser.parse_args(argv)
+    OVERRIDES[:] = args.set
     if not args.binance and not (args.data1 and args.data2):
         parser.error("data1 data2 ya da --binance KÖK gerekli")
     if args.stage == AUTO_STAGE:
