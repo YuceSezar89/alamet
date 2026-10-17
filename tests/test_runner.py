@@ -196,3 +196,27 @@ def test_the_production_profile_is_the_full_original_defaults():
     panel, trade = profile_params("orijinal")
     assert (panel, trade) == stage_params("S17")
     assert profile_params("S9") == stage_params("S9")
+
+
+def test_signal_handler_cancels_the_run_and_releases_the_store(tmp_path, universe):
+    import os
+    import signal
+
+    from alamet.runner import run_until_signal
+
+    write_cache(tmp_path / "cache", universe, 96 * 5)
+    runner, logs = make_runner(tmp_path, universe, int(universe.time[0]) * 1000)
+
+    async def idle(poll_s=0.5):
+        runner.system = prepare_offline(runner)
+        await asyncio.sleep(30)
+
+    async def scenario():
+        runner.run = idle
+        task = asyncio.ensure_future(run_until_signal(runner))
+        await asyncio.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(task, 5)
+
+    asyncio.run(scenario())
+    assert any("Durduruldu" in line for line in logs)

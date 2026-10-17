@@ -180,6 +180,20 @@ class Runner:  # pylint: disable=too-many-instance-attributes
             self.store.close()
 
 
+async def run_until_signal(runner: Runner) -> None:
+    """SIGINT/SIGTERM gelince döngüyü iptal eder; `finally` WebSocket'i kapatır, depoyu bırakır."""
+    import signal  # pylint: disable=import-outside-toplevel
+
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(runner.run())
+    for name in ("SIGINT", "SIGTERM"):
+        loop.add_signal_handler(getattr(signal, name), task.cancel)
+    try:
+        await task
+    except asyncio.CancelledError:
+        runner.log("Durduruldu (sinyal): son kayıt tutarlı.")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Alamet canlı yürütücü (gölge çalışma: emir yok)")
     parser.add_argument("--universe", required=True)
@@ -204,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         to_ms(args.anchor),
         args.daily_mode,
     )
-    asyncio.run(runner.run())
+    asyncio.run(run_until_signal(runner))
     return 0
 
 
