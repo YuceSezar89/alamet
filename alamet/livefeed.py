@@ -42,6 +42,7 @@ from alamet.timeframe import SignalTf, from_interval
 
 REPAIR_ATTEMPTS = 5
 REPAIR_DELAY_S = 2.0
+SETTLE_MS = 30_000
 VOLUME_TOLERANCE = 1e-9
 
 CandleFetcher = Callable[[str, int, int], Awaitable[list[Candle]]]
@@ -123,12 +124,15 @@ class LiveFeed:  # pylint: disable=too-many-instance-attributes
         repair_attempts: int = REPAIR_ATTEMPTS,
         repair_delay_s: float = REPAIR_DELAY_S,
         fetch_page: PageFetcher | None = None,
+        settle_ms: int = SETTLE_MS,
     ) -> None:
         self.root, self.symbols, self.tf = root, symbols, tf
         self.on_bar, self.on_correction = on_bar, on_correction
         self.fetch_candles, self.start_stream, self.now_ms = fetch_candles, start_stream, now_ms
         self.repair_attempts, self.repair_delay_s = repair_attempts, repair_delay_s
         self.fetch_page = fetch_page
+        self.settle_ms = settle_ms
+        self._reconciled = 0
         self.aggregator = BarAggregator(symbols, tf, grace_ms)
         self._stop: Callable[[], Awaitable[None]] | None = None
 
@@ -206,9 +210,14 @@ class LiveFeed:  # pylint: disable=too-many-instance-attributes
         return out
 
     async def reconcile(self, buckets: int = 3, now_ms: int | None = None) -> list[Correction]:
-        """Son `buckets` mumu Binance'in resmî mumlarıyla karşılaştırır; farkı düzeltir ve bildirir."""
+        """Son `buckets` mumu Binance'in resmî mumlarıyla karşılaştırır; farkı düzeltir ve bildirir.
+
+        Yalnızca kapanışı `settle_ms` kadar geçmiş mumlara bakılır: kapanıştan hemen sonra resmî
+        mum henüz eksik olabilir (gölge çalışmada +1 sn'de hacim ve kapanış geride kaldı) ve iyi
+        olan birleştirilmiş mumun üzerine yazılırdı.
+        """
         now = self.now_ms() if now_ms is None else now_ms
-        last_closed = now // self.tf.millis * self.tf.millis - self.tf.millis
+        last_closed = (now - self.settle_ms) // self.tf.millis * self.tf.millis - self.tf.millis
         first = last_closed - (buckets - 1) * self.tf.millis
         results = await asyncio.gather(
             *(
@@ -237,19 +246,19 @@ class LiveFeed:  # pylint: disable=too-many-instance-attributes
                         await result
         return corrections
 
-    async def run(self, poll_s: float = 0.5, reconcile_every_bars: int = 1) -> None:
-        """Hazırla, WebSocket'i aç, sonsuza kadar işle. Her `reconcile_every_bars` mumda onarım."""
+    async def run(self, poll_s: float = 0.5) -> None:
+        """Hazırla, WebSocket'i aç, sonsuza kadar işle. Her mum `settle_ms` sonra bir kez uzlaştırılır."""
         await self.prepare()
         await self.start()
-        done = 0
         try:
             while True:
                 await asyncio.sleep(poll_s)
-                bars = await self.process()
-                done += len(bars)
-                if bars and done >= reconcile_every_bars:
-                    done = 0
-                    await self.reconcile(now_ms=self.now_ms())
+                await self.process()
+                now = self.now_ms()
+                target = (now - self.settle_ms) // self.tf.millis * self.tf.millis - self.tf.millis
+                if target > self._reconciled:
+                    self._reconciled = target
+                    await self.reconcile(now_ms=now)
         finally:
             await self.stop()
 

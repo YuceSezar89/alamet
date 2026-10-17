@@ -153,7 +153,8 @@ def test_reconcile_corrects_stale_candles_and_fills_absent_ones(tmp_path):
     old_row = bd.load_cache(tmp_path, "BBB").iloc[-1]
     exchange.official[("BBB", last)] = Candle(last, *(float(old_row[c]) for c in bd.COLUMNS[1:]))
     exchange.official[("BBB", B0)] = candle(B0, 55.0)
-    corrections = asyncio.run(feed.reconcile(buckets=2, now_ms=B0 + 300_000 + 5_000))
+    settled = B0 + 300_000 + feed.settle_ms
+    corrections = asyncio.run(feed.reconcile(buckets=2, now_ms=settled))
     assert [(c.base, c.start_ms, c.old is None) for c in corrections] == [
         ("AAA", last, False),
         ("BBB", B0, True),
@@ -161,7 +162,7 @@ def test_reconcile_corrects_stale_candles_and_fills_absent_ones(tmp_path):
     assert fixes == corrections and isinstance(corrections[0], Correction)
     assert bd.load_cache(tmp_path, "AAA")["close"].iloc[-1] == 999.5
     assert bd.load_cache(tmp_path, "BBB")["open_time"].iloc[-1] == B0
-    assert asyncio.run(feed.reconcile(buckets=2, now_ms=B0 + 300_000 + 5_000)) == []
+    assert asyncio.run(feed.reconcile(buckets=2, now_ms=settled)) == []
 
 
 def test_start_subscribes_one_minute_streams_and_stop_closes_them(tmp_path):
@@ -206,3 +207,14 @@ def test_update_symbol_uses_the_cache_interval_for_the_default_page_fetcher(tmp_
     seed_cache(tmp_path)
     asyncio.run(bd.update_symbol(tmp_path, "AAA", 0, tf=TF))
     assert seen == ["5m"]
+
+
+def test_reconcile_ignores_buckets_that_closed_less_than_the_settle_time_ago(tmp_path):
+    feed, exchange, _, fixes = make_feed(tmp_path)
+    asyncio.run(feed.prepare())
+    exchange.official[("AAA", B0)] = candle(B0, 55.0)
+    just_closed = B0 + 300_000 + 1_000
+    assert asyncio.run(feed.reconcile(buckets=1, now_ms=just_closed)) == []
+    assert exchange.calls == 2 and not fixes
+    stale = bd.load_cache(tmp_path, "AAA")["open_time"].iloc[-1]
+    assert stale == B0 - 300_000
