@@ -1,5 +1,6 @@
 """
-Yerel izleme arayüzü (salt okunur): `data/alamet.sqlite` dosyasını açar, çalışan bota dokunmaz.
+Yerel izleme arayüzü: `data/alamet.sqlite` dosyasını salt okunur açar, çalışan bota dokunmaz.
+Ayarlar sekmesindeki "ya şöyle olsaydı" koşuları yalnızca geçmiş veride hesaplanır, hiçbir şey yazmaz.
 
   python -m alamet.webui --db data/alamet.sqlite --universe data/universe.json
 
@@ -9,6 +10,7 @@ Tarayıcıda http://127.0.0.1:8765 . Sunucu yalnızca bu bilgisayardan erişilir
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
 import pickle  # nosec B403
@@ -22,7 +24,7 @@ import numpy as np
 import pandas as pd
 from aiohttp import web
 
-from alamet import webviews
+from alamet import webviews, whatif
 
 STALE_SECONDS = 20 * 60
 CLOSE_REASONS = {
@@ -225,7 +227,7 @@ def snapshot_payload(conn, cache: Snapshot, names, halt_file: Path) -> dict:
     }
 
 
-def make_app(  # pylint: disable=too-many-locals
+def make_app(  # pylint: disable=too-many-locals,too-many-statements
     db_path: Path, universe_path: Path, halt_file: Path, data_root: Path | None = None
 ) -> web.Application:
     names = [s["base"] for s in json.loads(universe_path.read_text(encoding="utf-8"))["symbols"]]
@@ -343,9 +345,58 @@ def make_app(  # pylint: disable=too-many-locals
         page = (Path(__file__).parent / "webui.html").read_text(encoding="utf-8")
         return web.Response(text=page, content_type="text/html")
 
+    jobs = whatif.Jobs(data_root or Path("data/binance_15m"))
+
+    def json_response(payload, status: int = 200) -> web.Response:
+        return web.Response(
+            text=json.dumps(payload, default=str), content_type="application/json", status=status
+        )
+
+    async def whatif_fields(_request: web.Request) -> web.Response:
+        return json_response(
+            {"fields": whatif.fields(), "windows": whatif.WINDOWS, "costs": whatif.COSTS}
+        )
+
+    async def whatif_start(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+            overrides = body.get("overrides") or {}
+            if not isinstance(overrides, dict):
+                raise whatif.InvalidSetting("overrides bir sözlük olmalı")
+            job = jobs.submit(
+                asyncio.get_running_loop(),
+                overrides,
+                str(body.get("window", "all")),
+                str(body.get("cost", "ayar")),
+            )
+        except (whatif.InvalidSetting, ValueError) as exc:
+            return json_response({"error": str(exc)}, 400)
+        return json_response({"id": job["id"], "status": job["status"]})
+
+    async def whatif_status(request: web.Request) -> web.Response:
+        job = jobs.get(request.match_info["id"])
+        if job is None:
+            return json_response({"error": "bilinmeyen iş"}, 404)
+        return json_response({k: v for k, v in job.items() if k != "key"})
+
+    async def reaper(_app: web.Application):
+        async def loop_forever():
+            while True:
+                await asyncio.sleep(60)
+                jobs.reap()
+
+        task = asyncio.ensure_future(loop_forever())
+        yield
+        task.cancel()
+        jobs.close()
+
     app = web.Application()
+    app.cleanup_ctx.append(reaper)
     app.add_routes(
         [
+            web.get("/api/whatif/fields", whatif_fields),
+            web.post("/api/whatif", whatif_start),
+            web.get("/api/whatif/{id}", whatif_status),
             web.get("/", index),
             web.get("/api/all", api),
             web.get("/api/tables", json_view("tables", build_tables, {})),

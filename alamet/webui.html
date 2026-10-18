@@ -53,6 +53,14 @@ summary{cursor:pointer;font-weight:600;padding:6px 2px}
 .sel{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
 .sel input{max-width:200px;margin:0}
 g.pick{cursor:pointer}
+.wibar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0 12px}
+.wibar label{color:var(--mute);font-size:12px}
+.wis,.wi input[type=number],.wi input[type=text],.wi select{padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font:inherit}
+.wi input[type=number]{width:110px}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:6px 12px;font:inherit;cursor:pointer}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.btn:disabled{opacity:.5;cursor:default}
+tr.chg td{background:var(--hl)}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
 @media (max-width:820px){.app{grid-template-columns:1fr}aside{position:fixed;left:0;top:0;z-index:5;width:230px;transform:translateX(-100%);transition:.2s}aside.open{transform:none;box-shadow:0 0 30px #0006}.menu{display:inline-block}}
 </style>
@@ -78,7 +86,7 @@ g.pick{cursor:pointer}
 <section id="s-history"></section>
 <section id="s-events"></section>
 <section id="s-settings"></section>
-<p class="note">Salt okunur görünüm. Saatler tarayıcı saatinle ve UTC olarak yazılır. Hoca tabloları "şu anki" durumu gösterir (Pine'daki son bar gibi). Sayfa 5 sn'de bir yenilenir.</p>
+<p class="note">İzleme sekmeleri salt okunurdur (Ayarlar sekmesindeki denemeler yalnızca geçmiş veride hesaplanır). Saatler tarayıcı saatinle ve UTC olarak yazılır. Hoca tabloları "şu anki" durumu gösterir (Pine'daki son bar gibi). Sayfa 5 sn'de bir yenilenir.</p>
 </main>
 </div>
 <script>
@@ -142,9 +150,9 @@ function barChart(items,title,labelOf=i=>i.label){
 function nav(){$("nav").innerHTML=NAV.map(([g,items])=>`<h4>${g}</h4>`+items.map(([k,t])=>`<button class="${k==cur?"on":""}" onclick="pick('${k}')">${t}</button>`).join("")).join("");
  Object.keys(TITLES).forEach(k=>$("s-"+k).className=k==cur?"on":"");$("title").textContent=TITLES[cur];$("cards").style.display=cur=="summary"?"grid":"none"}
 function pick(k){cur=k;localStorage.setItem("tab",k);$("side").classList.remove("open");nav();ensure();draw()}
-const NEED={"hoca-trades":"tables","hoca-cash":"tables","hoca-reasons":"tables","hoca-engine":"tables","hoca-methods":"tables",symbols:"symbols",charts:"charts",settings:"settings",summary:"charts"};
+const NEED={"hoca-trades":"tables","hoca-cash":"tables","hoca-reasons":"tables","hoca-engine":"tables","hoca-methods":"tables",symbols:"symbols",charts:"charts",summary:"charts"};
 async function load(key){try{const r=await fetch("/api/"+key);DATA[key]=await r.json()}catch(e){DATA[key]=null}}
-async function ensure(){if(cur==="divergence"){await loadDiv();draw();return}const need=NEED[cur];if(need){await load(need);draw()}}
+async function ensure(){if(cur==="divergence"){await loadDiv();draw();return}if(cur==="settings"){await wiLoad();draw();return}const need=NEED[cur];if(need){await load(need);draw()}}
 
 
 /* ---- Ayrışma sekmesi ---- */
@@ -292,21 +300,100 @@ function drawSymbols(){const s=DATA.symbols;if(!s){$("s-symbols").innerHTML='<di
  +mount("sym",[{k:"symbol",h:"Sembol",f:symLink},{k:"side",h:"Sinyal yönü",f:sideTxt},{k:"method",h:"Yöntem",f:v=>METH[v]??"-"},{k:"power",h:"MTF güç %",num:1,f:v=>num(v,1)},{k:"move_pct",h:"Sinyalden hareket %",num:1,f:sgn},{k:"number",h:"Ayrışma no",num:1},{k:"top",h:"İlk-2'de",f:yn},{k:"double",h:"Çift ayrışma",f:yn},{k:"lock",h:"Yön kilidi",f:(v,r)=>r.side&&v===r.side?'<span class="ok">geçti</span>':'<span class="mute">geçmedi</span>'},{k:"open",h:"Açık işlem",f:yn},{k:"price",h:"Son fiyat",num:1,f:v=>num(v,5)}],s,{search:1,limit:300})}
 function drawCharts(){const c=DATA.charts;if(!c||!c.equity){$("s-charts").innerHTML='<div class="empty">Veri yok.</div>';return}
  $("s-charts").innerHTML=lineChart(c.equity,"Kasa eğrisi (sanal kasa, kapanan işlemler)")+`<div class="grid2">`+barChart(c.r_hist,"İşlem başına R dağılımı")+barChart(c.per_day.slice(-30).map(d=>({label:new Date(d.t*1000).toLocaleDateString("tr",{day:"2-digit",month:"2-digit"}),n:d.n})),"Günlük kapanan işlem sayısı (son 30 gün)")+`</div>`+barChart(c.reasons,"Çıkış nedenleri")}
+/* ---- Ayarlar: ayarı değiştir, GEÇMİŞ veride sonucu gör (bota dokunmaz) ---- */
+const REASON={0:"Kâr al (TP)",1:"Kâr geri verme kilidi",2:"Ters sinyal",3:"Sıralama değişimi (swap)",4:"Felaket stop",5:"Zaman stopu",6:"Sert DD acil çıkış",7:"Günlük kayıp limiti",8:"Kasa kâr kilidi"};
+const escA=s=>esc(s).replace(/"/g,"&quot;");
 let SETQ="";
-function setFilter(v){SETQ=v;drawSettings()}
-function drawSettings(){const s=DATA.settings;if(!s||!s.length){$("s-settings").innerHTML='<div class="empty">Veri yok.</div>';return}
+const WI={fields:null,byCode:{},windows:{},costs:{},draft:{},window:"all",cost:"ayar",res:null,run:null,error:null};
+try{const s=JSON.parse(localStorage.getItem("wi")||"{}");if(s.draft&&typeof s.draft==="object")WI.draft=s.draft;if(s.window)WI.window=s.window;if(s.cost)WI.cost=s.cost}catch(e){}
+function wiSave(){try{localStorage.setItem("wi",JSON.stringify({draft:WI.draft,window:WI.window,cost:WI.cost}))}catch(e){}}
+async function wiLoad(){if(WI.fields)return;
+ try{const d=await (await fetch("/api/whatif/fields")).json();WI.fields=d.fields;WI.windows=d.windows;WI.costs=d.costs;WI.byCode={};d.fields.forEach(f=>WI.byCode[f.code]=f);
+  Object.keys(WI.draft).forEach(c=>{if(!WI.byCode[c])delete WI.draft[c]});if(!WI.windows[WI.window])WI.window="all";if(!WI.costs[WI.cost])WI.cost="ayar"}catch(e){WI.fields=null}}
+function wiShow(f,v){if(f.kind==="select"){const o=f.options.find(o=>o.v===v);return o?o.l:String(v)}if(f.kind==="bool")return v?"Açık":"Kapalı";return String(v)}
+function wiInput(f){const v=f.code in WI.draft?WI.draft[f.code]:f.default,c=escA(f.code);
+ if(f.kind==="bool")return`<input type="checkbox" data-code="${c}" ${v?"checked":""} onchange="wiSet(this)">`;
+ if(f.kind==="select")return`<select data-code="${c}" onchange="wiSet(this)">${f.options.map((o,i)=>`<option value="${i}" ${o.v===v?"selected":""}>${esc(o.l)}</option>`).join("")}</select>`;
+ if(f.kind==="text")return`<input type="text" data-code="${c}" value="${escA(v)}" onchange="wiSet(this)">`;
+ return`<input type="number" data-code="${c}" value="${v}" step="${f.kind==="int"?1:"any"}" onchange="wiSet(this)">`}
+function wiSet(el){const f=WI.byCode[el.dataset.code];let v;
+ if(f.kind==="bool")v=el.checked;else if(f.kind==="select")v=f.options[+el.value].v;else if(f.kind==="text")v=el.value;
+ else{v=parseFloat(el.value);if(!isFinite(v)){el.value=f.code in WI.draft?WI.draft[f.code]:f.default;return}if(f.kind==="int")v=Math.round(v)}
+ if(v===f.default)delete WI.draft[f.code];else WI.draft[f.code]=v;
+ wiSave();wiRefreshRow(f.code);wiRefreshBar()}
+function wiRefreshRow(code){const tr=document.querySelector(`tr[data-row="${code}"]`);if(!tr)return;const chg=code in WI.draft;tr.classList.toggle("chg",chg);const b=tr.querySelector("button");if(b)b.style.visibility=chg?"visible":"hidden"}
+function wiRefreshBar(){const n=Object.keys(WI.draft).length,b=$("wi-reset");if(b){b.disabled=!n;b.textContent="↺ Varsayılana dön"+(n?` (${n} değişiklik)`:"")}}
+function wiReset(code){delete WI.draft[code];wiSave();wiRenderGroups();wiRefreshBar()}
+function wiResetAll(){WI.draft={};wiSave();wiRenderGroups();wiRefreshBar()}
+function wiBar(){return`<div class="wibar"><button class="btn" id="wi-reset" onclick="wiResetAll()">↺ Varsayılana dön</button>
+ <label>Pencere <select class="wis" onchange="WI.window=this.value;wiSave()">${Object.entries(WI.windows).map(([k,t])=>`<option value="${k}" ${k===WI.window?"selected":""}>${esc(t)}</option>`).join("")}</select></label>
+ <label>Maliyet <select class="wis" onchange="WI.cost=this.value;wiSave()">${Object.entries(WI.costs).map(([k,t])=>`<option value="${k}" ${k===WI.cost?"selected":""}>${esc(t)}</option>`).join("")}</select></label>
+ <button class="btn pri" id="wi-run" onclick="wiRun()">▶ Koştur</button><span id="wi-status" class="mute"></span></div>`}
+async function wiPost(overrides){const r=await fetch("/api/whatif",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({overrides,window:WI.window,cost:WI.cost})});
+ const d=await r.json();if(!r.ok)throw new Error(d.error||"istek reddedildi");return d.id}
+async function wiRun(){if(WI.run)return;WI.error=null;const ov={...WI.draft},has=Object.keys(ov).length>0;
+ WI.run={started:Date.now(),ids:{}};WI.res={base:null,draft:has?null:undefined,ov,window:WI.window,cost:WI.cost};wiRenderRun();wiRenderResult();
+ try{WI.run.ids.base=await wiPost({});if(has)WI.run.ids.draft=await wiPost(ov)}catch(e){WI.error=String(e.message||e);WI.run=null;wiRenderRun();return}
+ wiPoll()}
+async function wiPoll(){const run=WI.run;if(!run)return;let pending=false;
+ try{for(const k of Object.keys(run.ids)){if(WI.res[k])continue;const d=await (await fetch("/api/whatif/"+run.ids[k])).json();
+   if(d.status==="done")WI.res[k]=d.result;else if(d.status==="error"){WI.error=d.error}else pending=true}}
+ catch(e){WI.error="Sunucuya ulaşılamadı: "+e}
+ if(WI.error||!pending){WI.run=null}else setTimeout(wiPoll,1500);
+ wiRenderRun();wiRenderResult()}
+function wiRenderRun(){const b=$("wi-run"),s=$("wi-status");if(!b||!s)return;b.disabled=!!WI.run;
+ if(WI.error)s.innerHTML=`<span class="bad">Hata: ${esc(WI.error)}</span>`;
+ else if(WI.run){const sec=Math.round((Date.now()-WI.run.started)/1000);s.textContent=`Çalışıyor… ${sec} sn (tüm geçmişte ilk koşu ~1-2 dk sürebilir)`;setTimeout(()=>{if(WI.run)wiRenderRun()},1000)}
+ else s.textContent=""}
+const WI_ROWS=[["trades","İşlem",0,0],["ret","Getiri %",2,1],["final","Son kasa $",2,1],["max_dd","Maks. düşüş %",2,-1],["win_rate","Kazanma %",1,1],["profit_factor","Kâr faktörü (PF)",2,1],["avg_r","Ort. R",3,1],["long_share","Long payı %",0,0],["top10_share","İlk 10 işlemin kâr payı %",0,-1]];
+const dt=ts=>new Date(ts*1000).toLocaleDateString("tr");
+function twoLine(a,b,title){const pts=[...a,...(b||[])];if(pts.length<2)return"";
+ const W=640,H=220,L=52,R=10,T=10,B=24,xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+ const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys),dy=(y1-y0)||1,dx=(x1-x0)||1;
+ const X=t=>L+(t-x0)/dx*(W-L-R),Y=v=>T+(1-(v-y0)/dy)*(H-T-B);
+ const path=(s,col,w)=>`<path d="${s.map((p,i)=>`${i?"L":"M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ")}" fill="none" stroke="${col}" stroke-width="${w}"/>`;
+ const ticks=[0,.5,1].map(f=>y0+f*dy),dates=[x0,(x0+x1)/2,x1].map(dt);
+ return`<div class="chart"><h3>${title}</h3><svg viewBox="0 0 ${W} ${H}">${ticks.map(v=>`<line x1="${L}" x2="${W-R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${L-6}" y="${Y(v)+4}" text-anchor="end" font-size="11" fill="var(--mute)">${v.toFixed(0)}</text>`).join("")}
+ ${dates.map((s,i)=>`<text x="${L+i*(W-L-R)/2}" y="${H-6}" text-anchor="${i==0?"start":i==2?"end":"middle"}" font-size="11" fill="var(--mute)">${s}</text>`).join("")}
+ ${path(a,"var(--mute)",1.5)}${b?path(b,"var(--acc)",2):""}</svg><p class="note" style="margin:4px 0 0"><span style="color:var(--mute)">━</span> Varsayılan ${b?'&nbsp; <span style="color:var(--acc)">━</span> Değiştirilmiş':""}</p></div>`}
+function wiResultHtml(){const r=WI.res;if(!r)return"";
+ if(!r.base)return`<div class="chart"><div class="empty">Hesaplanıyor…</div></div>`;
+ const b=r.base.metrics,d=r.draft&&r.draft.metrics,one=r.draft===undefined;
+ const cell=(v,dg)=>v==null?"-":Number(v).toFixed(dg);
+ const rows=WI_ROWS.map(([k,l,dg,good])=>{let diff="";
+  if(d&&b[k]!=null&&d[k]!=null){const x=d[k]-b[k],cls=good===0||x===0?"mute":((x>0)===(good>0)?"ok":"bad");diff=`<span class="${cls}">${x>0?"+":""}${x.toFixed(dg)}</span>`}
+  return`<tr><td>${l}</td><td class="n">${cell(b[k],dg)}</td>${one?"":`<td class="n"><b>${d?cell(d[k],dg):"…"}</b></td><td class="n">${diff}</td>`}</tr>`}).join("");
+ const changed=Object.entries(r.ov||{}).map(([c,v])=>{const f=WI.byCode[c];return f?`<li>${esc(f.label)}: <span class="mute">${esc(wiShow(f,f.default))}</span> → <b>${esc(wiShow(f,v))}</b></li>`:""}).join("");
+ const act=(d?r.draft:r.base),t=(d||b).trades;
+ let h=`<h3>Sonuç</h3><p class="note">${dt(act.from)} → ${dt(act.to)} · pencere: ${esc(WI.windows[r.window]||r.window)} · maliyet: ${esc(WI.costs[r.cost]||r.cost)} · geçmiş veride hesaplanmıştır, canlı bota etkisi yoktur.</p>`
+  +`<div class="wrap"><table><thead><tr><th>Ölçüt</th><th class="n">Varsayılan</th>${one?"":'<th class="n">Değiştirilmiş</th><th class="n">Fark</th>'}</tr></thead><tbody>${rows}</tbody></table></div>`;
+ if(changed)h+=`<p class="note" style="margin-bottom:2px">Değiştirilen ayarlar:</p><ul class="note" style="margin-top:0">${changed}</ul>`;
+ if(t<30)h+=`<p class="note warn">Az işlem (${t}): bu sonuç rastlantı olabilir.</p>`;
+ h+=`<p class="note">Sistem yola bağımlı olduğu için tek bir koşu yanıltıcı olabilir; farklı pencerelerde de bakın.</p>`;
+ h+=twoLine(r.base.equity,d?r.draft.equity:null,"Kasa eğrisi (sanal kasa)");
+ const tr=act.trades;
+ if(tr.length)h+=det("wi-tr",`İşlemler <span class="mute">(son ${tr.length}${d?", değiştirilmiş ayarla":""})</span>`,mount("wi-trades",[{k:"symbol",h:"Sembol",f:v=>`<b>${v}</b>`},{k:"side",h:"Yön",f:sideTxt},{k:"open",h:"Açılış",f:fmt},{k:"close",h:"Kapanış",f:fmt},{k:"entry",h:"Giriş",num:1,f:v=>num(v,4)},{k:"exit",h:"Çıkış",num:1,f:v=>num(v,4)},{k:"usd",h:"Kâr/zarar $",num:1,f:sgn},{k:"r",h:"R",num:1,f:sgn},{k:"reason",h:"Neden",f:v=>REASON[v]??v}],tr,{search:1,limit:200}),false);
+ return h}
+function wiRenderResult(){const el=$("wi-result");if(el)el.innerHTML=wiResultHtml()}
+function wiRenderGroups(){const el=$("wi-groups");if(!el)return;
  const q=SETQ.toLowerCase(),groups={};
- s.forEach(r=>{if(q&&!(r.label+" "+r.value+" "+r.group).toLowerCase().includes(q))return;(groups[r.group]??=[]).push(r)});
- let h=`<p class="note">Botun şu an kullandığı ayarlar, Hoca'nın kodundaki başlıklarla (kayıtlı sistem durumundan, salt okunur). Kod adı için satırın üzerine gel.</p><input class="filter" placeholder="Ayar ara…" value="${esc(SETQ)}" oninput="setFilter(this.value)">`;
- Object.entries(groups).forEach(([g,list],i)=>{
-  h+=det("set"+g,`${esc(g)} <span class="mute">(${list.length})</span>`,`<div class="wrap"><table><tbody>${list.map(r=>`<tr title="${esc(r.code)}"><td style="white-space:normal">${esc(r.label)}</td><td class="n"><b>${esc(r.value)}</b></td></tr>`).join("")}</tbody></table></div>`,q?true:i<3)});
- if(!Object.keys(groups).length)h+='<div class="empty">Eşleşen ayar yok.</div>';
- $("s-settings").innerHTML=h;
- if(q){const el=$("s-settings").querySelector("input");el.focus();el.setSelectionRange(el.value.length,el.value.length)}}
+ WI.fields.forEach(f=>{if(q&&!(f.label+" "+f.group).toLowerCase().includes(q))return;(groups[f.group]??=[]).push(f)});
+ let h="";
+ Object.entries(groups).forEach(([g,list],i)=>{const nch=list.filter(f=>f.code in WI.draft).length;
+  h+=det("set"+g,`${esc(g)} <span class="mute">(${list.length})</span>${nch?` <span class="tag">${nch} değişti</span>`:""}`,
+   `<div class="wrap wi"><table><tbody>${list.map(f=>{const chg=f.code in WI.draft;return`<tr data-row="${escA(f.code)}" class="${chg?"chg":""}" title="${escA(f.code)}"><td style="white-space:normal">${esc(f.label)}</td><td>${wiInput(f)}</td><td class="mute">varsayılan: ${esc(wiShow(f,f.default))}</td><td style="width:34px"><button class="btn" style="padding:1px 7px;visibility:${chg?"visible":"hidden"}" onclick="wiReset('${f.code}')" title="Varsayılana dön">↺</button></td></tr>`}).join("")}</tbody></table></div>`,q?true:(nch>0||i<3))});
+ if(!Object.keys(groups).length)h='<div class="empty">Eşleşen ayar yok.</div>';
+ el.innerHTML=h}
+function setFilter(v){SETQ=v;wiRenderGroups()}
+function drawSettings(){if(!WI.fields){$("s-settings").innerHTML='<div class="empty">Veri yok.</div>';return}
+ $("s-settings").innerHTML=`<p class="note">Ayarları değiştirip <b>Koştur</b>'a basın: sonuç GEÇMİŞ veride hesaplanır ve varsayılanla yan yana gösterilir. Çalışan bota, veritabanına ve borsaya hiçbir etkisi yoktur. Değişiklikleriniz bu tarayıcıda saklanır.</p>`
+  +wiBar()+`<div id="wi-result"></div><input class="filter" placeholder="Ayar ara…" value="${escA(SETQ)}" oninput="setFilter(this.value)"><div id="wi-groups"></div>`;
+ wiRenderGroups();wiRefreshBar();wiRenderRun();wiRenderResult()}
 function draw(){drawCards();
  const map={summary:drawSummary,cand:drawCand,divergence:drawDivergence,"hoca-trades":drawHocaTrades,"hoca-cash":drawHocaCash,"hoca-reasons":drawHocaReasons,"hoca-engine":drawHocaEngine,"hoca-methods":drawHocaMethods,symbols:drawSymbols,charts:drawCharts,open:drawOpen,orders:drawOrders,history:drawHistory,events:drawEvents,settings:drawSettings};
  (map[cur]||drawSummary)()}
 async function tick(){try{const r=await fetch("/api/all");DATA.all=await r.json()}catch(e){$("cards").innerHTML=`<div class="card"><small>Hata</small><b class="bad">Veri alınamadı</b></div>`;return}
+ if(cur==="settings"){if(!WI.fields){await wiLoad();draw()}else drawCards();return}
  if(cur==="divergence")await loadDiv();else{const need=NEED[cur];if(need)await load(need)}
  if(document.activeElement&&document.activeElement.tagName==="INPUT"){drawCards();return}
  draw()}
