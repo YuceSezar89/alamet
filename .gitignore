@@ -8,3 +8,4 @@ data/
 !tests/data/
 *.log
 .DS_Store
+pine/original/
