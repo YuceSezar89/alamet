@@ -304,12 +304,12 @@ function drawCharts(){const c=DATA.charts;if(!c||!c.equity){$("s-charts").innerH
 const REASON={0:"Kâr al (TP)",1:"Kâr geri verme kilidi",2:"Ters sinyal",3:"Sıralama değişimi (swap)",4:"Felaket stop",5:"Zaman stopu",6:"Sert DD acil çıkış",7:"Günlük kayıp limiti",8:"Kasa kâr kilidi"};
 const escA=s=>esc(s).replace(/"/g,"&quot;");
 let SETQ="";
-const WI={fields:null,byCode:{},windows:{},costs:{},draft:{},window:"all",cost:"ayar",res:null,run:null,error:null};
-try{const s=JSON.parse(localStorage.getItem("wi")||"{}");if(s.draft&&typeof s.draft==="object")WI.draft=s.draft;if(s.window)WI.window=s.window;if(s.cost)WI.cost=s.cost}catch(e){}
-function wiSave(){try{localStorage.setItem("wi",JSON.stringify({draft:WI.draft,window:WI.window,cost:WI.cost}))}catch(e){}}
+const WI={fields:null,byCode:{},windows:{},costs:{},tfs:{},draft:{},window:"all",cost:"ayar",tf:"900",res:null,run:null,error:null};
+try{const s=JSON.parse(localStorage.getItem("wi")||"{}");if(s.draft&&typeof s.draft==="object")WI.draft=s.draft;if(s.window)WI.window=s.window;if(s.cost)WI.cost=s.cost;if(s.tf)WI.tf=String(s.tf)}catch(e){}
+function wiSave(){try{localStorage.setItem("wi",JSON.stringify({draft:WI.draft,window:WI.window,cost:WI.cost,tf:WI.tf}))}catch(e){}}
 async function wiLoad(){if(WI.fields)return;
- try{const d=await (await fetch("/api/whatif/fields")).json();WI.fields=d.fields;WI.windows=d.windows;WI.costs=d.costs;WI.byCode={};d.fields.forEach(f=>WI.byCode[f.code]=f);
-  Object.keys(WI.draft).forEach(c=>{if(!WI.byCode[c])delete WI.draft[c]});if(!WI.windows[WI.window])WI.window="all";if(!WI.costs[WI.cost])WI.cost="ayar"}catch(e){WI.fields=null}}
+ try{const d=await (await fetch("/api/whatif/fields")).json();WI.fields=d.fields;WI.windows=d.windows;WI.costs=d.costs;WI.tfs=d.tfs||{900:"15 dk"};WI.byCode={};d.fields.forEach(f=>WI.byCode[f.code]=f);
+  Object.keys(WI.draft).forEach(c=>{if(!WI.byCode[c])delete WI.draft[c]});if(!WI.windows[WI.window])WI.window="all";if(!WI.costs[WI.cost])WI.cost="ayar";if(!WI.tfs[WI.tf])WI.tf="900"}catch(e){WI.fields=null}}
 function wiShow(f,v){if(f.kind==="select"){const o=f.options.find(o=>o.v===v);return o?o.l:String(v)}if(f.kind==="bool")return v?"Açık":"Kapalı";return String(v)}
 function wiInput(f){const v=f.code in WI.draft?WI.draft[f.code]:f.default,c=escA(f.code);
  if(f.kind==="bool")return`<input type="checkbox" data-code="${c}" ${v?"checked":""} onchange="wiSet(this)">`;
@@ -326,20 +326,23 @@ function wiRefreshBar(){const n=Object.keys(WI.draft).length,b=$("wi-reset");if(
 function wiReset(code){delete WI.draft[code];wiSave();wiRenderGroups();wiRefreshBar()}
 function wiResetAll(){WI.draft={};wiSave();wiRenderGroups();wiRefreshBar()}
 function wiBar(){return`<div class="wibar"><button class="btn" id="wi-reset" onclick="wiResetAll()">↺ Varsayılana dön</button>
+ <label>Sinyal TF <select class="wis" onchange="WI.tf=this.value;wiSave()">${Object.entries(WI.tfs).map(([k,t])=>`<option value="${k}" ${k===WI.tf?"selected":""}>${esc(t)}</option>`).join("")}</select></label>
  <label>Pencere <select class="wis" onchange="WI.window=this.value;wiSave()">${Object.entries(WI.windows).map(([k,t])=>`<option value="${k}" ${k===WI.window?"selected":""}>${esc(t)}</option>`).join("")}</select></label>
  <label>Maliyet <select class="wis" onchange="WI.cost=this.value;wiSave()">${Object.entries(WI.costs).map(([k,t])=>`<option value="${k}" ${k===WI.cost?"selected":""}>${esc(t)}</option>`).join("")}</select></label>
  <button class="btn pri" id="wi-run" onclick="wiRun()">▶ Koştur</button><span id="wi-status" class="mute"></span></div>`}
-async function wiPost(overrides){const r=await fetch("/api/whatif",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({overrides,window:WI.window,cost:WI.cost})});
+async function wiPost(overrides){const r=await fetch("/api/whatif",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({overrides,window:WI.window,cost:WI.cost,tf:Number(WI.tf)})});
  const d=await r.json();if(!r.ok)throw new Error(d.error||"istek reddedildi");return d.id}
 async function wiRun(){if(WI.run)return;WI.error=null;const ov={...WI.draft},has=Object.keys(ov).length>0;
- WI.run={started:Date.now(),ids:{}};WI.res={base:null,draft:has?null:undefined,ov,window:WI.window,cost:WI.cost};wiRenderRun();wiRenderResult();
+ WI.run={started:Date.now(),ids:{}};WI.res={base:null,draft:has?null:undefined,ov,window:WI.window,cost:WI.cost,tf:WI.tf};wiRenderRun();wiRenderResult();
  try{WI.run.ids.base=await wiPost({});if(has)WI.run.ids.draft=await wiPost(ov)}catch(e){WI.error=String(e.message||e);WI.run=null;wiRenderRun();return}
  wiPoll()}
 async function wiPoll(){const run=WI.run;if(!run)return;let pending=false;
- try{for(const k of Object.keys(run.ids)){if(WI.res[k])continue;const d=await (await fetch("/api/whatif/"+run.ids[k])).json();
-   if(d.status==="done")WI.res[k]=d.result;else if(d.status==="error"){WI.error=d.error}else pending=true}}
- catch(e){WI.error="Sunucuya ulaşılamadı: "+e}
- if(WI.error||!pending){WI.run=null}else setTimeout(wiPoll,1500);
+ try{for(const k of Object.keys(run.ids)){if(WI.res[k])continue;const resp=await fetch("/api/whatif/"+run.ids[k]);const d=await resp.json();
+   if(resp.status===404){WI.error="Sunucu yeniden başlatıldığı için koşu kayboldu. Tekrar Koştur'a basın."}
+   else if(d.status==="done")WI.res[k]=d.result;else if(d.status==="error"){WI.error=d.error}else pending=true}
+  run.fails=0}
+ catch(e){run.fails=(run.fails||0)+1;if(run.fails>=10)WI.error="Sunucuya ulaşılamadı ("+e+"). Sunucu yeniden başlatılmış olabilir; tekrar Koştur'a basın.";else pending=true}
+ if(WI.error||!pending){WI.run=null}else setTimeout(wiPoll,run.fails?2000:1500);
  wiRenderRun();wiRenderResult()}
 function wiRenderRun(){const b=$("wi-run"),s=$("wi-status");if(!b||!s)return;b.disabled=!!WI.run;
  if(WI.error)s.innerHTML=`<span class="bad">Hata: ${esc(WI.error)}</span>`;
@@ -365,7 +368,7 @@ function wiResultHtml(){const r=WI.res;if(!r)return"";
   return`<tr><td>${l}</td><td class="n">${cell(b[k],dg)}</td>${one?"":`<td class="n"><b>${d?cell(d[k],dg):"…"}</b></td><td class="n">${diff}</td>`}</tr>`}).join("");
  const changed=Object.entries(r.ov||{}).map(([c,v])=>{const f=WI.byCode[c];return f?`<li>${esc(f.label)}: <span class="mute">${esc(wiShow(f,f.default))}</span> → <b>${esc(wiShow(f,v))}</b></li>`:""}).join("");
  const act=(d?r.draft:r.base),t=(d||b).trades;
- let h=`<h3>Sonuç</h3><p class="note">${dt(act.from)} → ${dt(act.to)} · pencere: ${esc(WI.windows[r.window]||r.window)} · maliyet: ${esc(WI.costs[r.cost]||r.cost)} · geçmiş veride hesaplanmıştır, canlı bota etkisi yoktur.</p>`
+ let h=`<h3>Sonuç</h3><p class="note">${dt(act.from)} → ${dt(act.to)} · sinyal TF: ${esc(WI.tfs[r.tf]||r.tf)} · pencere: ${esc(WI.windows[r.window]||r.window)} · maliyet: ${esc(WI.costs[r.cost]||r.cost)} · geçmiş veride hesaplanmıştır, canlı bota etkisi yoktur.</p>`
   +`<div class="wrap"><table><thead><tr><th>Ölçüt</th><th class="n">Varsayılan</th>${one?"":'<th class="n">Değiştirilmiş</th><th class="n">Fark</th>'}</tr></thead><tbody>${rows}</tbody></table></div>`;
  if(changed)h+=`<p class="note" style="margin-bottom:2px">Değiştirilen ayarlar:</p><ul class="note" style="margin-top:0">${changed}</ul>`;
  if(t<30)h+=`<p class="note warn">Az işlem (${t}): bu sonuç rastlantı olabilir.</p>`;

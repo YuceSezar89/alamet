@@ -354,7 +354,12 @@ def make_app(  # pylint: disable=too-many-locals,too-many-statements
 
     async def whatif_fields(_request: web.Request) -> web.Response:
         return json_response(
-            {"fields": whatif.fields(), "windows": whatif.WINDOWS, "costs": whatif.COSTS}
+            {
+                "fields": whatif.fields(),
+                "windows": whatif.WINDOWS,
+                "costs": whatif.COSTS,
+                "tfs": whatif.TFS,
+            }
         )
 
     async def whatif_start(request: web.Request) -> web.Response:
@@ -368,8 +373,9 @@ def make_app(  # pylint: disable=too-many-locals,too-many-statements
                 overrides,
                 str(body.get("window", "all")),
                 str(body.get("cost", "ayar")),
+                int(body.get("tf", whatif.BASE_SECONDS)),
             )
-        except (whatif.InvalidSetting, ValueError) as exc:
+        except (whatif.InvalidSetting, ValueError, TypeError) as exc:
             return json_response({"error": str(exc)}, 400)
         return json_response({"id": job["id"], "status": job["status"]})
 

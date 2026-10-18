@@ -19,8 +19,8 @@ from tests.test_stepper import random_universe
 @pytest.fixture
 def synthetic(monkeypatch):
     universe = random_universe(6, 96 * 10, 7)
-    monkeypatch.setattr(whatif, "_universe", lambda _root: (universe, SignalTf(900)))
-    monkeypatch.setattr(whatif, "_CACHE", whatif._Cache())  # noqa: SLF001
+    monkeypatch.setattr(whatif, "_base", lambda _root: universe)
+    monkeypatch.setattr(whatif, "_CACHE", whatif._Cache(resampled={}))  # noqa: SLF001
     return universe
 
 
@@ -193,3 +193,42 @@ def test_http_endpoints(tmp_path):
     fields, bad, worse, wrong, unknown = asyncio.run(go())
     assert len(fields["fields"]) > 150 and set(fields["windows"]) == {"all", "4000"}
     assert (bad, worse, wrong, unknown) == (400, 400, 400, 404)
+
+
+def test_signal_tf_is_built_from_the_15_minute_data(synthetic):
+    hourly = whatif.run({}, "all", "ayar", "x", 3600)
+    assert hourly["tf"] == 3600 and hourly["bars"] == synthetic.bars // 4
+    assert hourly["to"] - hourly["from"] == (hourly["bars"] - 1) * 3600
+    json.dumps(hourly)
+    quarter = whatif.run({}, "all", "ayar", "x")
+    assert quarter["tf"] == 900 and quarter["bars"] == synthetic.bars
+    assert whatif._CACHE.panel_key[-1] == 900  # noqa: SLF001
+
+
+def test_unknown_signal_tf_is_rejected(synthetic, tmp_path):
+    with pytest.raises(whatif.InvalidSetting):
+        whatif.run({}, "all", "ayar", "x", 300)
+
+    async def go():
+        jobs = whatif.Jobs(tmp_path)
+        with pytest.raises(whatif.InvalidSetting):
+            jobs.submit(asyncio.get_running_loop(), {}, "all", "ayar", 60)
+
+    asyncio.run(go())
+
+
+def test_http_signal_tf(tmp_path):
+    uni = tmp_path / "u.json"
+    uni.write_text(json.dumps({"symbols": [{"base": "BTC"}]}), encoding="utf-8")
+
+    async def go():
+        app = make_app(tmp_path / "t.sqlite", uni, tmp_path / "HALT")
+        async with TestClient(TestServer(app)) as client:
+            fields = await (await client.get("/api/whatif/fields")).json()
+            bad = await client.post("/api/whatif", json={"overrides": {}, "tf": 300})
+            null = await client.post("/api/whatif", json={"overrides": {}, "tf": None})
+            return fields, bad.status, null.status
+
+    fields, bad, null = asyncio.run(go())
+    assert set(fields["tfs"]) == {"900", "1800", "3600", "7200", "14400"}
+    assert (bad, null) == (400, 400)

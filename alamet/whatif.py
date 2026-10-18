@@ -27,11 +27,13 @@ from alamet.panel import build_panel
 from alamet.stages import stage_params
 from alamet.system import run_system
 from alamet.timeframe import SignalTf
-from alamet.universe import SYMBOLS, Universe
+from alamet.universe import SYMBOLS, Universe, resample_universe
 from alamet.webviews import METHODS, SELECTOR_MODES, flatten
 
 BASE_STAGE = "S17"
 EXCLUDED = ("panel.symbol.signal_tf_seconds",)
+TFS = {900: "15 dk", 1800: "30 dk", 3600: "1 saat", 7200: "2 saat", 14400: "4 saat"}
+BASE_SECONDS = 900
 WINDOWS = {"all": "Tüm geçmiş", "4000": "Son 4000 bar (Pine penceresi)"}
 COSTS = {"ayar": "Ayarlardaki maliyet", "gerçekçi": "Gerçekçi (komisyon %0,05, kayma %0,02)"}
 REALISTIC = ("trade.fee_in=0.05", "trade.fee_out=0.05", "trade.slippage=0.02")
@@ -162,8 +164,8 @@ def _raw(spec: dict, value) -> str:
 @dataclass
 class _Cache:
     root: str | None = None
-    universe: Universe | None = None
-    tf: SignalTf | None = None
+    base: Universe | None = None
+    resampled: dict[int, Universe] | None = None
     panel_key: tuple | None = None
     panel: object = None
 
@@ -171,13 +173,22 @@ class _Cache:
 _CACHE = _Cache()
 
 
-def _universe(root: Path):
+def _base(root: Path) -> Universe:
     if _CACHE.root != str(root):
-        tf = infer_tf(root)
-        _CACHE.universe = load_universe_binance(root, SYMBOLS, tf=tf)
-        _CACHE.tf, _CACHE.root = tf, str(root)
+        _CACHE.base = load_universe_binance(root, SYMBOLS, tf=infer_tf(root))
+        _CACHE.root, _CACHE.resampled = str(root), {}
         _CACHE.panel_key, _CACHE.panel = None, None
-    return _CACHE.universe, _CACHE.tf
+    return _CACHE.base
+
+
+def _universe(root: Path, seconds: int) -> tuple[Universe, SignalTf]:
+    """15 dk önbellekten sinyal TF'sine (30 dk, 1 sa...) birleştirilmiş evren (kapanmış mumlar)."""
+    base = _base(root)
+    if seconds == BASE_SECONDS:
+        return base, SignalTf(seconds)
+    if seconds not in _CACHE.resampled:
+        _CACHE.resampled[seconds] = resample_universe(base, seconds)
+    return _CACHE.resampled[seconds], SignalTf(seconds)
 
 
 def run(
@@ -185,27 +196,30 @@ def run(
     window: str = "all",
     cost: str = "ayar",
     root: str | Path = DEFAULT_ROOT,
+    tf_seconds: int = BASE_SECONDS,
 ) -> dict:
     """Seçilen ayarlarla geçmişi oynatır ve özet döner. Saf hesap: dışarıya hiçbir şey yazmaz."""
     if window not in WINDOWS:
         raise InvalidSetting(f"bilinmeyen pencere: {window}")
+    if tf_seconds not in TFS:
+        raise InvalidSetting(f"bilinmeyen sinyal TF'si: {tf_seconds}")
     sets = to_sets(overrides, cost)
-    universe, tf = _universe(Path(root))
+    universe, tf = _universe(Path(root), tf_seconds)
     panel_p, trade_p = params_with(BASE_STAGE, sets, tf.seconds)
     start = 0 if window == "all" else max(universe.bars - WINDOW_BARS, 0)
     daily = daily_from_bars(universe, tf.seconds)
     pack = daily_pack(daily, panel_p.dr_rsi_len, panel_p.dr_look)
     day = day_inputs(map_to_bars(pack, daily.time, universe.time, tf_seconds=tf.seconds))
-    key = (repr(panel_p), window, str(root))
+    key = (repr(panel_p), window, str(root), tf_seconds)
     if _CACHE.panel_key != key:
         _CACHE.panel = None
         _CACHE.panel = build_panel(universe, panel_p, True, start, None, day)
         _CACHE.panel_key = key
     result = run_system(universe, panel_p, trade_p, True, panel=_CACHE.panel, start=start, day=day)
-    return _summary(result, tf, trade_p, window, cost, overrides)
+    return _summary(result, tf, trade_p, window, cost, overrides, tf_seconds)
 
 
-def _summary(result, tf, trade_p, window, cost, overrides) -> dict:  # noqa: PLR0913
+def _summary(result, tf, trade_p, window, cost, overrides, tf_seconds) -> dict:  # noqa: PLR0913
     """Motor sonuçları `start`'tan itibaren indekslidir (`panel.universe` kesilmiş evren)."""
     universe = result.panel.universe
     done = [t for t in result.trades if t.close_bar >= 0]
@@ -222,6 +236,7 @@ def _summary(result, tf, trade_p, window, cost, overrides) -> dict:  # noqa: PLR
         "window": window,
         "cost": cost,
         "overrides": overrides,
+        "tf": tf_seconds,
         "from": int(times[0]),
         "to": int(times[-1]),
         "bars": int(bars),
@@ -281,37 +296,41 @@ class Jobs:
         self.last_used = self.clock()
 
     @staticmethod
-    def key(overrides: dict, window: str, cost: str) -> str:
+    def key(overrides: dict, window: str, cost: str, tf_seconds: int) -> str:
         import json  # pylint: disable=import-outside-toplevel
 
-        return json.dumps([sorted(overrides.items()), window, cost], default=str)
+        return json.dumps([sorted(overrides.items()), window, cost, tf_seconds], default=str)
 
-    def submit(self, loop, overrides: dict, window: str, cost: str) -> dict:
+    def submit(
+        self, loop, overrides: dict, window: str, cost: str, tf_seconds: int = BASE_SECONDS
+    ) -> dict:
         import uuid  # pylint: disable=import-outside-toplevel
 
         to_sets(overrides, cost)  # doğrula: geçersizse InvalidSetting
         if window not in WINDOWS:
             raise InvalidSetting(f"bilinmeyen pencere: {window}")
-        key = self.key(overrides, window, cost)
+        if tf_seconds not in TFS:
+            raise InvalidSetting(f"bilinmeyen sinyal TF'si: {tf_seconds}")
+        key = self.key(overrides, window, cost, tf_seconds)
         job = {"id": uuid.uuid4().hex[:12], "status": "queued", "key": key, "created": self.clock()}
         if key in self.results:
             job.update(status="done", result=self.results[key])
         else:
             self.jobs[job["id"]] = job
-            loop.create_task(self._work(loop, job, overrides, window, cost))
+            loop.create_task(self._work(loop, job, overrides, window, cost, tf_seconds))
         self.jobs[job["id"]] = job
         for old in list(self.jobs)[:-KEEP_JOBS]:
             del self.jobs[old]
         return job
 
-    async def _work(self, loop, job, overrides, window, cost) -> None:
+    async def _work(self, loop, job, overrides, window, cost, tf_seconds) -> None:
         if self.pool is None:
             self.pool = ProcessPoolExecutor(max_workers=1, initializer=_init_worker)
         self.last_used = self.clock()
         job["status"] = "running"
         try:
             result = await loop.run_in_executor(
-                self.pool, run, overrides, window, cost, str(self.root)
+                self.pool, run, overrides, window, cost, str(self.root), tf_seconds
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             job.update(status="error", error=f"{type(exc).__name__}: {exc}")
