@@ -662,6 +662,11 @@ def with_signal_tf(panel: PanelParams, seconds: int) -> PanelParams:
     return replace(panel, symbol=replace(panel.symbol, signal_tf_seconds=seconds))
 
 
+def couple_dr_rank(panel: PanelParams, trade: TradeParams) -> PanelParams:
+    """Pine (`drOn and drRankOn`): kolaylık puanı sıralamaya yalnızca Devisso çarpanı açıkken eklenir."""
+    return replace(panel, dr_rank=panel.dr_rank and trade.dr_on)
+
+
 def stage_params(name: str, **trade_overrides) -> tuple[PanelParams, TradeParams]:
     """Basamağın (panel, motor) parametreleri; `trade_overrides` motor alanlarını değiştirir ve
     gölge kasa bunlarla birlikte yeniden türetilir."""
@@ -670,7 +675,7 @@ def stage_params(name: str, **trade_overrides) -> tuple[PanelParams, TradeParams
     panel = panel_params(
         stage.n_top, trade.max_slots, stage.selector, stage.div, shadow_params(trade), **stage.extra
     )
-    return panel, trade
+    return couple_dr_rank(panel, trade), trade
 
 
 QUALITY = EntryQualityParams()

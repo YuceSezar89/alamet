@@ -171,6 +171,19 @@ def map_to_bars(
     return out
 
 
+def map_same_day(pack: np.ndarray, daily_time: np.ndarray, bar_time: np.ndarray):
+    """TradingView 30 dk ve üzeri grafiklerde geçmiş barlar kendi gününün TAM paketini görür
+    (15 dk ve altında dünün paketini; bkz. `map_to_bars`). Yalnızca TradingView karşılaştırması içindir.
+    """
+    bar_time = np.asarray(bar_time, dtype=np.int64)
+    day_start = (bar_time // SECONDS_PER_DAY) * SECONDS_PER_DAY
+    index = np.clip(np.searchsorted(daily_time, day_start), 0, len(daily_time) - 1)
+    found = daily_time[index] == day_start
+    out = np.full((len(bar_time),) + pack.shape[1:], np.nan)
+    out[found] = pack[index[found]]
+    return out
+
+
 LEVEL_KINDS = (("W", 0), ("M", 6), ("Y", 12))
 
 

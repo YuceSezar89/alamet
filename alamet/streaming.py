@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from alamet.gate import ConfirmGate
+from alamet.heikin import bucket_id
 from alamet.primitives import pine_stdev, pine_sum
 from alamet.symbol import SymbolParams
 from alamet.volume import MIN_SHARE
@@ -316,7 +317,7 @@ class SymbolStream:
     ) -> SymbolStep:
         p = self.p
         scores = [
-            ha.update(open_, high, low, close, int(time_s) // int(p.signal_tf_seconds * mult))
+            ha.update(open_, high, low, close, bucket_id(time_s, p.signal_tf_seconds * mult))
             for ha, mult in zip(self.ha, p.ha_multipliers)
         ]
         final_pct, ok_long, ok_short = mtf_confirm_step(scores, p.ha_weights, p.tf_need, p.tf_on)

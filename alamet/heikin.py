@@ -3,9 +3,9 @@ A6 — MTF Heikin Ashi gücü (tek zaman dilimi): (haC - haO) / (haH - haL) * 10
 
 Kaynak Pine: pine/A6_ha_score.pine (DEPV2 f_haScore 376-401).
 HTF mumu sinyal TF barlarından birleştirilir. HTF bar sınırı timeframe.change(tf) ile
-belirlenir; burada bu, `bucket` dizisindeki değişimdir (zaman damgası // HTF saniye).
-Gün uzunluğu 30/45/60/90 dk'ya tam bölündüğü için 00:00 UTC hizalı borsa seanslarında
-TradingView hizalamasıyla aynıdır. Veri başlangıcı bir HTF barının ortasına denk gelirse
+belirlenir; burada bu, `bucket` dizisindeki değişimdir. HTF mumları her gün 00:00 UTC'den
+yeniden başlar (TradingView seans hizası): gün HTF süresine tam bölünmüyorsa (ör. 75 dk) günün son
+mumu kısa kalır. Bölünüyorsa (30/45/60/90/120 dk) sınırlar zaman // süre ile aynıdır. Veri başlangıcı bir HTF barının ortasına denk gelirse
 ilk bar yeni bar gibi başlatılır (Pine `na(cO)`).
 """
 
@@ -14,8 +14,18 @@ from __future__ import annotations
 import numpy as np
 
 
+SECONDS_PER_DAY = 86400
+
+
+def bucket_id(time_s: int, tf_seconds: int) -> int:
+    """HTF mum kimliği: gün numarası ve gün içindeki sıra (her gün yeniden başlar)."""
+    day, offset = divmod(int(time_s), SECONDS_PER_DAY)
+    return day * SECONDS_PER_DAY + offset // int(tf_seconds)
+
+
 def bucket_ids(time_s: np.ndarray, tf_seconds: int) -> np.ndarray:
-    return np.asarray(time_s, dtype=np.int64) // int(tf_seconds)
+    day, offset = np.divmod(np.asarray(time_s, dtype=np.int64), SECONDS_PER_DAY)
+    return day * SECONDS_PER_DAY + offset // int(tf_seconds)
 
 
 def ha_score(

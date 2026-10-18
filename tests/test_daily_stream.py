@@ -157,3 +157,17 @@ def test_empty_universe_of_unlisted_symbols_gives_nan_rows():
     universe = with_nan(market(2, 20, seed=7), 0, 0, 96 * 20)
     history, live = check(universe)
     assert np.isnan(history[:, 0]).all() and np.isnan(live[:, 0]).all()
+
+
+def test_same_day_mapping_gives_every_bar_its_own_days_pack():
+    import numpy as np  # pylint: disable=import-outside-toplevel
+
+    from alamet.daily import map_same_day  # pylint: disable=import-outside-toplevel
+
+    day = 86400
+    pack = np.array([[[1.0]], [[2.0]], [[3.0]]])
+    daily_time = np.array([0, day, 2 * day])
+    bars = np.array([0, 1800, day, day + 43200, 2 * day + 84600])
+    out = map_same_day(pack, daily_time, bars)
+    assert out[:, 0, 0].tolist() == [1.0, 1.0, 2.0, 2.0, 3.0]
+    assert np.isnan(map_same_day(pack, daily_time, np.array([5 * day]))).all()

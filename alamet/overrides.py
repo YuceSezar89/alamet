@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass, replace
 
 from alamet.panel import PanelParams
-from alamet.stages import stage_params, with_signal_tf
+from alamet.stages import couple_dr_rank, stage_params, with_signal_tf
 
 
 def coerce(raw: str, current):
@@ -35,6 +35,11 @@ def coerce(raw: str, current):
 
 def _set(obj, parts: list[str], raw: str):
     head, rest = parts[0], parts[1:]
+    if isinstance(obj, (tuple, list)):
+        index = int(head)
+        current = obj[index]
+        value = coerce(raw, current) if not rest else _set(current, rest, raw)
+        return type(obj)([*obj[:index], value, *obj[index + 1 :]])
     if isinstance(obj, dict):
         current = obj.get(head)
         value = coerce(raw, current) if not rest else _set(current, rest, raw)
@@ -70,15 +75,19 @@ def params_with(stage: str, sets: list[str], tf_seconds: int | None = None):
             trade = _set(trade, parts, raw)
     if tf_seconds is not None:
         panel = with_signal_tf(panel, tf_seconds)
-    return panel, trade
+    return couple_dr_rank(panel, trade), trade
 
 
-def panel_only(sets: list[str]) -> PanelParams:
-    """Yalnız panel geçersiz kılmalarıyla varsayılan panel (sinyal basamakları için)."""
-    panel = PanelParams()
+def apply_panel(panel: PanelParams, sets: list[str]) -> PanelParams:
+    """`panel.*` geçersiz kılmalarını uygular (motor `trade.*` olanlar yok sayılır)."""
     for item in sets:
         path, _, raw = item.partition("=")
         root, *parts = path.split(".")
         if root == "panel" and parts:
             panel = _set(panel, parts, raw)
     return panel
+
+
+def panel_only(sets: list[str]) -> PanelParams:
+    """Yalnız panel geçersiz kılmalarıyla varsayılan panel (sinyal basamakları için)."""
+    return apply_panel(PanelParams(), sets)

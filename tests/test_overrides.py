@@ -36,3 +36,20 @@ def test_unknown_names_are_rejected():
         params_with("S17", ["trade.quality.yok=1"])
     with pytest.raises(ValueError):
         params_with("S17", ["engine.x=1"])
+
+
+def test_tuple_fields_are_set_by_index():
+    panel, _ = params_with(
+        "S17", ["panel.symbol.ha_multipliers.2=5", "panel.symbol.ha_weights.3=5"]
+    )
+    assert panel.symbol.ha_multipliers == (2, 3, 5, 6)
+    assert panel.symbol.ha_weights == (2.0, 3.0, 4.0, 5.0)
+
+
+def test_ease_ranking_bonus_needs_the_devisso_multiplier_on():
+    panel, _ = params_with("S17", [])
+    assert panel.dr_rank is True
+    panel, _ = params_with("S17", ["trade.dr_on=false"])
+    assert panel.dr_rank is False
+    panel, _ = stage_params("S17", dr_on=False)
+    assert panel.dr_rank is False

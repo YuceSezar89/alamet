@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from alamet.heikin import bucket_ids, ha_score
+from alamet.heikin import bucket_id, bucket_ids, ha_score
 
 OPEN = np.array([10.0, 11.0, 12.0, 13.0])
 HIGH = np.array([12.0, 13.0, 14.0, 15.0])
@@ -57,3 +57,19 @@ def test_different_timeframes_give_different_scores():
 def test_data_starting_mid_bucket_still_initialises():
     out = ha_score(OPEN[1:], HIGH[1:], LOW[1:], CLOSE[1:], bucket_ids(TIME[1:], 1800))
     assert np.isfinite(out).all()
+
+
+def test_buckets_restart_every_day_when_the_period_does_not_divide_it():
+    day = 86400
+    times = np.array([day - 900, day, day + 900, day + 4500, day + 4500 + 900])
+    ids = bucket_ids(times, 4500).tolist()
+    assert ids[0] != ids[1] and ids[1] == ids[2] and ids[3] != ids[2] and ids[3] == ids[4] - 0
+    assert bucket_ids(times, 4500).tolist() == [bucket_id(t, 4500) for t in times]
+
+
+def test_dividing_periods_keep_the_epoch_boundaries():
+    times = np.arange(0, 3 * 86400, 900)
+    for period in (1800, 2700, 3600, 5400, 7200):
+        change_new = np.flatnonzero(np.diff(bucket_ids(times, period)))
+        change_old = np.flatnonzero(np.diff(times // period))
+        assert change_new.tolist() == change_old.tolist()
