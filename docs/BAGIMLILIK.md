@@ -413,3 +413,19 @@ Orijinal: 204 `input`, 514 tanım. Davranışı etkileyen her girdinin Python ka
 5. **Bağımlılık matrisi testi:** Bölüm 4'teki her L döngüsü için bir senaryo testi (ör. L6: zararlı kapanıştan sonra tam 12 bar giriş engeli).
 
 Bu planın ön koşulu: Bölüm 6.3'teki "çok sembollü gerçek zincir" açığının kapatılması için 20 sembolün CSV'si (OHLCV, 15 dk) gerekecek.
+
+### 6.5i Varsayılan dışı ayar ve 5 dk doğrulaması (18 Eki 2026)
+
+Altı TradingView sınaması (`DEBUG_S17`, 20 sembol, `verify_system S17 ... --set ...`); hepsinde SD/EN/NO (20 sembol), KS0/KS1/KS2 ve CL için **0 uyuşmazlık**:
+
+| Sınama | TV ayarı | Python `--set` | Python işlem | Sınanan yeni dal |
+|---|---|---|---:|---|
+| S-A | 5 dk grafik, `ssTf`=5 | (TF CSV'den) | 21 | 5 dk bağlam (13 günlük günlük pencere, HA 10/15/20/30 dk) |
+| S-B | `useTp`, `tpR`=1.0 | `trade.use_tp=true trade.tp_r=1.0` | 67 | TP çıkışı (39 işlem TP ile kapandı) |
+| S-C | `useStop` 1.5R, `useTimeStop` 24 | `trade.use_stop=true trade.stop_r=1.5 trade.use_time_stop=true trade.max_hold=24` | 61 | stop (9) ve zaman stopu (14) |
+| S-D | `maxExt` 6, `zMin` 0.5, `nTop` 3 | `trade.quality.max_ext=6 panel.divergence.z_min=0.5 panel.n_top=3` | 67 | üç ayar birlikte |
+| S-E | `dOpenHr`=3 | `panel.daily_open_hour=3` | 56 | günlük open saati ≠ 0 (kontrol: aynı CSV varsayılanla uyuşmuyor) |
+| S-F | `ownMult` 0.7, `minPrev` 3, `coolBars` 6, `vpTfNeed` 2, `useDOp` kapalı | `panel.own.mult=0.7 panel.divergence.min_prev=3 trade.quality.cool_bars=6 panel.symbol.tf_need=2 trade.quality.use_daily_open=false` | 65 | karışım; kasa kâr kilidi bir kez tetiklendi |
+
+Sonuç: "dOpenHr ≠ 0" ve TP/stop/zaman stopu açık maddeleri kapandı. 5 dk TF yalnızca varsayılan ayarlarla sınandı (1 dk sınanmadı).
+Araç: `alamet/overrides.py` (`--set YOL=DEĞER`).
