@@ -427,5 +427,12 @@ Altı TradingView sınaması (`DEBUG_S17`, 20 sembol, `verify_system S17 ... --s
 | S-E | `dOpenHr`=3 | `panel.daily_open_hour=3` | 56 | günlük open saati ≠ 0 (kontrol: aynı CSV varsayılanla uyuşmuyor) |
 | S-F | `ownMult` 0.7, `minPrev` 3, `coolBars` 6, `vpTfNeed` 2, `useDOp` kapalı | `panel.own.mult=0.7 panel.divergence.min_prev=3 trade.quality.cool_bars=6 panel.symbol.tf_need=2 trade.quality.use_daily_open=false` | 65 | karışım; kasa kâr kilidi bir kez tetiklendi |
 
-Sonuç: "dOpenHr ≠ 0" ve TP/stop/zaman stopu açık maddeleri kapandı. 5 dk TF yalnızca varsayılan ayarlarla sınandı (1 dk sınanmadı).
+Tam sistemde (S17, tüm öğrenen katmanlar açık) iki uç ayar kümesi daha:
+
+| Sınama | TV ayarı | Python işlem | Sonuç |
+|---|---|---:|---|
+| S-G (sıkı uç) | `engPrior` 2, `engMinN` 2, `engBlock` 0.05, `engDecayBars` 24, `engKelly` 0.5, `engExplore` 1.0, `poolSize` 4, `poolMinN` 1, `poolDecayBars` 24, `poolForgive` 0.05, `poolDecay` 0.5, `dynGain` 3.0, `killN` 2, `killR` 0.1 | 11 | 0 uyuşmazlık |
+| S-H (gevşek uç) | `engPrior` 8, `engMinN` 12, `engBlock` 0.4, `engDecayBars` 192, `engDecay` 0.99, `engKelly` 0.15, `poolSize` 12, `poolMinN` 8, `poolDecayBars` 96, `poolDecay` 0.95, `poolForgive` 0.5, `top1Floor` -5 | 23 | 0 uyuşmazlık |
+
+Sonuç: "dOpenHr ≠ 0" ve TP/stop/zaman stopu açık maddeleri kapandı. Kelly, havuz ve dinamik kasa alanlarının her biri artık hem parça parça sistemlerde (S13-S16, S43-S50) hem tam sistemde (S-G, S-H) varsayılan dışı değerlerle doğrulandı. 5 dk TF yalnızca varsayılan ayarlarla sınandı (1 dk sınanmadı).
 Araç: `alamet/overrides.py` (`--set YOL=DEĞER`).
