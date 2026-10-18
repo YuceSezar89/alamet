@@ -91,7 +91,10 @@ def test_charts_build_equity_histogram_and_daily_counts():
 
 
 def test_divergence_overview_and_detail_follow_the_tracker():
-    from alamet.webviews import divergence_detail, divergence_overview  # pylint: disable=import-outside-toplevel
+    from alamet.webviews import (
+        divergence_detail,
+        divergence_overview,
+    )  # pylint: disable=import-outside-toplevel
 
     system, universe = stepped_system()
     names = [f"S{i}" for i in range(universe.n)]

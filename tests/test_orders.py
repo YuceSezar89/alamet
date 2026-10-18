@@ -20,6 +20,8 @@ from alamet.orders import (
     round_down,
     size_close,
     size_open,
+    stop_client_id,
+    stop_price,
 )
 from alamet.stages import stage_params
 from alamet.stepper import StepSystem
@@ -215,3 +217,17 @@ def test_every_event_of_a_real_run_becomes_a_valid_intent_or_a_recorded_rejectio
             assert closing.quantity == intent.quantity and closing.reduce_only
             assert {intent.side, closing.side} == {BUY, SELL}
     assert all(r.reason for r in rejected)
+
+
+def test_stop_price_rounds_away_from_the_position_to_the_tick():
+    rules = OrderRules(0.001, 0.001, 1000.0, 5.0, tick=0.5)
+    limits = RiskLimits(1.0, 1000.0, 5000.0)
+
+    def event(side):
+        return SimpleNamespace(side=side, entry=100.0, dist=0.0123, trade_id=1)
+
+    assert stop_price(event(1), rules, limits) == 95.0
+    assert stop_price(event(-1), rules, limits) == 105.0
+    assert stop_price(SimpleNamespace(side=1, entry=100.0, dist=float("nan")), rules, limits) == 0.0
+    assert stop_price(event(1), rules, RiskLimits(1.0, 1000.0, 5000.0, stop_r=0)) == 0.0
+    assert stop_client_id(7) == "al7s"

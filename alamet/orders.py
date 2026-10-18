@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, Decimal
 
 from alamet.market import SymbolInfo
 
@@ -29,6 +29,7 @@ class OrderRules:
     min_qty: float
     max_qty: float
     min_notional: float
+    tick: float = 0.0
 
     @classmethod
     def from_info(cls, info: SymbolInfo) -> "OrderRules":
@@ -38,6 +39,7 @@ class OrderRules:
             info.market_min_qty or info.min_qty,
             info.market_max_qty or info.max_qty,
             info.min_notional,
+            info.tick_size,
         )
 
 
@@ -50,6 +52,8 @@ class RiskLimits:
     max_total_usdt: float
     slippage_warn_pct: float = 0.3
     allowed: frozenset[str] | None = None
+    stop_r: float = 4.0
+    leverage: int = 5
 
     def __post_init__(self) -> None:
         if not (self.scale > 0 and self.max_position_usdt > 0 and self.max_total_usdt > 0):
@@ -71,6 +75,7 @@ class OrderIntent:
     client_id: str
     reduce_only: bool
     reason: str = ""
+    stop_price: float = 0.0
 
     @property
     def notional(self) -> float:
@@ -91,6 +96,30 @@ def round_down(value: float, step: float) -> float:
         return value
     units = (Decimal(str(value)) / Decimal(str(step))).to_integral_value(rounding=ROUND_DOWN)
     return float(units * Decimal(str(step)))
+
+
+def round_up(value: float, step: float) -> float:
+    if step <= 0 or not math.isfinite(value):
+        return value
+    units = (Decimal(str(value)) / Decimal(str(step))).to_integral_value(rounding=ROUND_CEILING)
+    return float(units * Decimal(str(step)))
+
+
+def stop_client_id(trade_id: int) -> str:
+    return f"al{int(trade_id)}s"
+
+
+def stop_price(event, rules: OrderRules, limits: RiskLimits) -> float:
+    """Felaket stopu: giriş ∓ stop_r × R (R = motorun risk mesafesi). Borsa tick'ine pozisyondan
+    UZAĞA yuvarlanır; hesaplanamazsa ya da kapalıysa 0 (stop yok)."""
+    dist = float(getattr(event, "dist", math.nan))
+    if not limits.stop_r or not (math.isfinite(dist) and dist > 0):
+        return 0.0
+    side = int(event.side)
+    raw = float(event.entry) * (1.0 - side * limits.stop_r * dist)
+    if not (math.isfinite(raw) and raw > 0):
+        return 0.0
+    return round_down(raw, rules.tick) if side == 1 else round_up(raw, rules.tick)
 
 
 def client_id(trade_id: int, kind: str) -> str:
@@ -140,6 +169,7 @@ def size_open(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     return OrderIntent(
         "open", base, f"{base}USDT", order_side(int(event.side), "open"), qty, price, trade_id,
         bar_time, client_id(trade_id, "open"), False,
+        stop_price=stop_price(event, rules, limits),
     )  # fmt: skip
 
 

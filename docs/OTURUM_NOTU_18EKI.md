@@ -34,11 +34,11 @@ Kayıp/Kazanç sebebi, Kasa motoru, Yöntem × Emtia); Tüm semboller; Grafikler
 cd /Users/yusuf/Documents/TRader/CascadeProjects/alamet
 export PYTHONPATH=$PWD
 # demo bot (tüm semboller; anahtarlar .env'de, canlı için ALAMET_ALLOW_LIVE=EVET gerekir, SET ETME)
-nohup python3 -u -m alamet.runner --universe data/universe.json --anchor 2023-07-01 \
+nohup .venv/bin/python -u -m alamet.runner --universe data/universe.json --anchor 2023-07-01 \
   --db data/alamet.sqlite --trade demo --max-position 1000 --max-total 5000 \
-  --daily-loss 250 --max-orders 200 > data/runner8.log 2>&1 &
-# izleme arayüzü
-nohup python3 -u -m alamet.webui --data-root data/binance_15m > data/webui.log 2>&1 &
+  --daily-loss 250 --max-orders 200 > data/runner9.log 2>&1 &
+# izleme arayüzü (DİKKAT: python3 değil .venv/bin/python; python3 başka ortama gidebilir)
+nohup .venv/bin/python -u -m alamet.webui --data-root data/binance_15m > data/webui.log 2>&1 &
 ```
 Bot açılışta kapalı kalınan barları kendisi onarır ve uzlaştırma yapar. Durum `data/alamet.sqlite`'te kalıcıdır.
 Kontrol: `tail data/runner8.log` ve arayüzdeki "Bot" kartı.

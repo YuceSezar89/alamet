@@ -39,6 +39,10 @@ RECV_WINDOW = 5000
 LIVE_FLAG = "ALAMET_ALLOW_LIVE"
 LIVE_ANSWER = "EVET"
 FILLED = "FILLED"
+TIMESTAMP_ERROR = -1021
+STOP_DONE = ("TRIGGERED", "FINISHED")
+UNKNOWN_ALGO = (-2011, -2013)
+DUPLICATE_ID = -4116
 
 Transport = Callable[[str, str, dict[str, str]], Awaitable[tuple[int, Any]]]
 
@@ -166,6 +170,18 @@ class FuturesClient:  # pylint: disable=too-many-instance-attributes,too-many-pu
     async def call(
         self, method: str, path: str, params: dict[str, Any] | None = None, signed: bool = True
     ) -> Any:
+        """İstek; saat penceresi hatasında (−1021) saat farkı yenilenip BİR kez tekrar denenir."""
+        try:
+            return await self._call_once(method, path, params, signed)
+        except ApiError as exc:
+            if exc.code != TIMESTAMP_ERROR or not signed:
+                raise
+            await self.sync_time()
+            return await self._call_once(method, path, params, signed)
+
+    async def _call_once(
+        self, method: str, path: str, params: dict[str, Any] | None, signed: bool
+    ) -> Any:
         url = self.build_url(path, params, signed)
         headers = {"X-MBX-APIKEY": self.credentials.key}
         status, body = await self.transport(method, url, headers)
@@ -265,6 +281,54 @@ class FuturesClient:  # pylint: disable=too-many-instance-attributes,too-many-pu
             raise OrderUncertain(
                 f"{intent.client_id}: gönderim yanıtı alınamadı ve sorgulanamadı ({exc!r})"
             ) from exc
+
+    # ------------------------------------------------------- felaket stopu
+    async def place_stop(
+        self, symbol: str, side: str, trigger_price: float, client_algo_id: str
+    ) -> dict:
+        """Pozisyonu tamamen kapatan koşullu piyasa stopu (`closePosition`, işaret fiyatı).
+        Aynı kimlik zaten varsa (−4116) yeniden gönderim sayılır, hata değil."""
+        params = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": "STOP_MARKET",
+            "triggerPrice": decimal_text(trigger_price),
+            "closePosition": "true",
+            "workingType": "MARK_PRICE",
+            "clientAlgoId": client_algo_id,
+        }
+        try:
+            return await self.call("POST", "/fapi/v1/algoOrder", params)
+        except ApiError as exc:
+            if exc.code != DUPLICATE_ID:
+                raise
+            return {"clientAlgoId": client_algo_id, "algoStatus": "DUPLICATE"}
+
+    async def cancel_stop(self, client_algo_id: str) -> bool:
+        """Stopu iptal eder; zaten yoksa/bitmişse False."""
+        try:
+            await self.call("DELETE", "/fapi/v1/algoOrder", {"clientAlgoId": client_algo_id})
+        except ApiError as exc:
+            if exc.code in UNKNOWN_ALGO:
+                return False
+            raise
+        return True
+
+    async def stop_status(self, client_algo_id: str) -> str | None:
+        """Stopun durumu (NEW, CANCELED, TRIGGERED, FINISHED ...); borsa tanımıyorsa None."""
+        try:
+            body = await self.call("GET", "/fapi/v1/algoOrder", {"clientAlgoId": client_algo_id})
+        except ApiError as exc:
+            if exc.code in UNKNOWN_ALGO:
+                return None
+            raise
+        return str(body.get("algoStatus", "")) or None
+
+    async def open_stops(self) -> set[str]:
+        """Borsada bekleyen stopların `clientAlgoId` kümesi."""
+        rows = await self.call("GET", "/fapi/v1/openAlgoOrders")
+        return {str(r["clientAlgoId"]) for r in rows}
 
     async def query_order(self, symbol: str, client_id: str) -> OrderResult:
         body = await self.call(

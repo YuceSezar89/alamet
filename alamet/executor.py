@@ -8,6 +8,10 @@ Akış (bar başına):
                 yeniden denemede emir önce kimliğiyle sorgulanır (aynı emir iki kez gitmez).
   3. `reconcile`: sistemin pozisyonları ile borsadaki pozisyonlar karşılaştırılır; fark varsa DURUR.
 
+Felaket stopu: açılış dolunca borsaya `closePosition` koşullu stop konur (yalnızca bot yokken
+korur; motor çıkışı yine kendi yapar). Kapanışta iptal edilir; eksik kalan stop `reconcile`
+sırasında yeniden konur. Stop tetiklenmişse sistem pozisyonu kapalı yazılır, bot durmaz.
+
 Güvenlik anahtarları yalnızca YENİ AÇILIŞLARI engeller; kapanışlar (riski azaltan) her zaman geçer:
   - acil durdurma (`HALT` dosyası ya da kayıtlı durdurma), - günlük kayıp tavanı,
   - günlük emir sayısı sınırı, - kuru çalışma (borsaya hiçbir şey gitmez, kayıt tutulur).
@@ -22,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from alamet.events import CloseEvent, OpenEvent
-from alamet.futures_api import ApiError, FuturesClient, OrderUncertain
+from alamet.futures_api import STOP_DONE, ApiError, FuturesClient, OrderUncertain
 from alamet.orders import (
     OrderIntent,
     OrderRules,
@@ -30,6 +34,7 @@ from alamet.orders import (
     RiskLimits,
     size_close,
     size_open,
+    stop_client_id,
 )
 
 HALT_KEY = "halt"
@@ -62,6 +67,7 @@ class Executor:
         if api is None and not safety.dry_run:
             raise ValueError("Gerçek emir için borsa istemcisi gerekir")
         self.api, self.store, self.symbols = api, store, tuple(symbols)
+        self._prepared: set[str] = set()
         self.rules, self.limits, self.safety, self.log, self.clock = (
             rules,
             limits,
@@ -123,7 +129,7 @@ class Executor:
             "symbol": intent.symbol, "side": intent.side, "quantity": intent.quantity,
             "ref_price": intent.ref_price, "client_id": intent.client_id,
             "reduce_only": int(intent.reduce_only), "reason": intent.reason or None,
-            "bar_time": intent.bar_time,
+            "bar_time": intent.bar_time, "stop_price": intent.stop_price,
         }  # fmt: skip
 
     def _rejected(self, rejection: Rejection, bar_time: int) -> None:
@@ -213,6 +219,8 @@ class Executor:
             bool(row["reduce_only"]), row["reason"] or "",
         )  # fmt: skip
         resend = row["attempts"] > 0
+        if row["kind"] == "open":
+            await self._prepare(row["symbol"])
         with self.store.conn:
             self.store.mark_outbox(row["id"], "pending", None, 1)
         started = time.perf_counter()
@@ -265,6 +273,8 @@ class Executor:
             self.store.mark_outbox(
                 row["id"], "done" if ok else "failed", None if ok else result.status
             )
+        if ok:
+            await self._after_fill(row)
         warn = self.limits.slippage_warn_pct
         if slippage is not None and slippage > warn:
             self.log(f"UYARI kayma {row['symbol']} {row['kind']}: %{slippage:.3f} > %{warn}")
@@ -273,15 +283,89 @@ class Executor:
             f"kayma {slippage if slippage is None else round(slippage, 4)} gecikme {latency_ms:.0f} ms"
         )
 
+    # ------------------------------------------------------ felaket stopu
+    async def _prepare(self, symbol: str) -> None:
+        """Sembolü izole marjin ve ayarlı kaldıraca getirir (süreç başına bir kez)."""
+        if symbol in self._prepared:
+            return
+        await self.api.set_margin_type(symbol, "ISOLATED")
+        await self.api.set_leverage(symbol, self.limits.leverage)
+        self._prepared.add(symbol)
+
+    async def _after_fill(self, row: dict) -> None:
+        """Açılış dolunca stop koy, kapanış dolunca stopu iptal et. Hata botu durdurmaz."""
+        try:
+            if row["kind"] == "open":
+                await self._place_stop(row)
+            else:
+                await self.api.cancel_stop(stop_client_id(row["trade_id"]))
+        except (ApiError, OSError) as exc:
+            self.log(f"UYARI stop işlemi başarısız {row['client_id']}: {exc!r}")
+            with self.store.conn:
+                self.store.note("StopHatası", row["bar_time"], row["base"], {"hata": repr(exc)})
+
+    async def _place_stop(self, row: dict) -> None:
+        price = float(row.get("stop_price") or 0.0)
+        if price <= 0:
+            return
+        side = "SELL" if row["side"] == "BUY" else "BUY"
+        await self.api.place_stop(row["symbol"], side, price, stop_client_id(row["trade_id"]))
+        self.log(f"STOP {side} {row['symbol']} tetik {price} ({stop_client_id(row['trade_id'])})")
+
+    def _open_intents(self) -> dict[int, dict]:
+        """Açık pozisyonların açılış niyetleri (stop fiyatı ve yönü için)."""
+        ids = [int(i) for i in self.store.positions().trade_id]
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        cursor = self.store.conn.execute(
+            f"SELECT * FROM outbox WHERE kind='open' AND trade_id IN ({marks})", ids
+        )
+        names = [c[0] for c in cursor.description]
+        return {int(r[names.index("trade_id")]): dict(zip(names, r)) for r in cursor.fetchall()}
+
+    async def ensure_stops(self, theirs: Mapping[str, float]) -> None:
+        """Borsada pozisyonu olup stopu olmayanlara stop koyar; tetiklenmiş stopu işler."""
+        intents = self._open_intents()
+        if not intents:
+            return
+        resting = await self.api.open_stops()
+        positions = self.store.positions()
+        for r in positions.itertuples():
+            intent = intents.get(int(r.trade_id))
+            if intent is None or float(intent.get("stop_price") or 0.0) <= 0:
+                continue
+            stop_id = stop_client_id(r.trade_id)
+            if theirs.get(r.symbol, 0.0) == 0.0:
+                if await self.api.stop_status(stop_id) in STOP_DONE:
+                    with self.store.conn:
+                        self.store.close_position(int(r.trade_id), int(self.clock() * 1000))
+                        self.store.note(
+                            "StopTetiklendi", int(intent["bar_time"]), intent["base"],
+                            {"trade_id": int(r.trade_id), "tetik": intent["stop_price"]},
+                        )  # fmt: skip
+                    self.log(
+                        f"STOP TETİKLENDİ {r.symbol} işlem {int(r.trade_id)}: sistem kapatıldı"
+                    )
+            elif stop_id not in resting:
+                try:
+                    await self._place_stop(intent)
+                except ApiError as exc:
+                    self.log(f"UYARI stop yeniden konamadı {r.symbol}: {exc!r}")
+
     # ---------------------------------------------------------- uzlaştırma
     async def reconcile(self) -> list[str]:
         """Sistem pozisyonları ile borsa pozisyonları. Fark varsa durdurur ve farkları döner."""
         if self.safety.dry_run or self.api is None:
             return []
+        theirs = await self.api.positions()
+        try:
+            await self.ensure_stops(theirs)
+        except (ApiError, OSError) as exc:
+            self.log(f"UYARI stop denetimi yapılamadı: {exc!r}")
         mine: dict[str, float] = {}
         for r in self.store.positions().itertuples():
             mine[r.symbol] = mine.get(r.symbol, 0.0) + r.side * float(r.quantity)
-        theirs = await self.api.positions()
         universe = {f"{b}USDT" for b in self.symbols}
         problems = []
         for symbol in sorted(set(mine) | (set(theirs) & universe)):

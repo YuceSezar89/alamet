@@ -707,7 +707,7 @@ class TradeEngine:  # pylint: disable=too-many-public-methods,too-many-instance-
             dyn_on=p.use_dyn, dyn_score=score, dd_factor=dd_factor, streak_factor=streak_factor,
             below_start_cap=p.lock_on and eq < p.start_cap, kelly_on=p.kelly.on, kelly_mean=mean,
             kelly_effective_n=effective, kelly_exploring=exploring, dr_on=p.dr_on,
-            dr_ratio=ratio, dr_percentile=percentile,
+            dr_ratio=ratio, dr_percentile=percentile, dist=dist,
         )  # fmt: skip
 
     def enter(self, step_i: int, b: BarInputs, halted: bool, drawdown: float) -> None:

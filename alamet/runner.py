@@ -214,7 +214,10 @@ def build_trader(runner: "Runner", infos, args):
     from alamet.orders import OrderRules, RiskLimits  # pylint: disable=import-outside-toplevel
 
     only = frozenset(b.strip().upper() for b in args.only.split(",") if b.strip()) or None
-    limits = RiskLimits(args.scale, args.max_position, args.max_total, allowed=only)
+    limits = RiskLimits(
+        args.scale, args.max_position, args.max_total, allowed=only,
+        stop_r=args.stop_r, leverage=args.leverage,
+    )  # fmt: skip
     safety = Safety(args.daily_loss, args.max_orders, args.trade == "dry", Path(args.halt_file))
     api = None if args.trade == "dry" else FuturesClient(args.trade)
     rules = {info.base: OrderRules.from_info(info) for info in infos}
@@ -248,6 +251,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-total", type=float, default=10000.0, help="toplam açık USDT tavanı")
     parser.add_argument("--daily-loss", type=float, default=None, help="günlük kayıp tavanı (USDT)")
     parser.add_argument("--max-orders", type=int, default=None, help="günlük emir sayısı sınırı")
+    parser.add_argument(
+        "--stop-r", type=float, default=4.0, help="borsa felaket stopu (R katı; 0 = stop yok)"
+    )
+    parser.add_argument("--leverage", type=int, default=5, help="izole marjin kaldıracı")
     parser.add_argument("--only", default="", help="yalnızca bu taban adlar, virgülle (ör. BTC)")
     parser.add_argument("--halt-file", default="data/HALT", help="varsa yeni açılış yapılmaz")
     args = parser.parse_args(argv)

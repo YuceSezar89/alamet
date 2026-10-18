@@ -23,6 +23,7 @@ class FakeApi:
     def __init__(self, price_shift=0.0):
         self.sent, self.queried, self.shift = [], [], price_shift
         self.positions_value, self.fail, self.known = {}, None, {}
+        self.prepared, self.stops, self.stop_states = [], {}, {}
 
     async def place_order(self, intent):
         if self.fail is not None:
@@ -48,14 +49,35 @@ class FakeApi:
     async def positions(self):
         return dict(self.positions_value)
 
+    async def set_margin_type(self, symbol, margin_type="ISOLATED"):
+        self.prepared.append((symbol, margin_type))
 
-def open_event(trade_id=1, symbol=0, side=1, entry=80_000.0, notional=800.0):
+    async def set_leverage(self, symbol, leverage):
+        self.prepared.append((symbol, leverage))
+        return leverage
+
+    async def place_stop(self, symbol, side, trigger_price, client_algo_id):
+        self.stops[client_algo_id] = (symbol, side, trigger_price)
+        return {"algoStatus": "NEW"}
+
+    async def cancel_stop(self, client_algo_id):
+        return self.stops.pop(client_algo_id, None) is not None
+
+    async def stop_status(self, client_algo_id):
+        return self.stop_states.get(client_algo_id)
+
+    async def open_stops(self):
+        return set(self.stops)
+
+
+def open_event(trade_id=1, symbol=0, side=1, entry=80_000.0, notional=800.0, dist=float("nan")):
     return OpenEvent(bar=0, phase=0, symbol=symbol, side=side, trade_id=trade_id, method=0,
                      strength=0, rank=1, div_n=0, entry=entry, take=0.0, notional=notional,
                      risk_pct=0.0, multiplier=1.0, dyn_mult=1.0, kelly_mult=1.0, dr_mult=1.0,
                      rank_mult=1.0, dyn_on=False, dyn_score=0.0, dd_factor=1.0, streak_factor=1.0,
                      below_start_cap=False, kelly_on=False, kelly_mean=0.0, kelly_effective_n=0.0,
-                     kelly_exploring=False, dr_on=False, dr_ratio=0.0, dr_percentile=0.0)  # fmt: skip
+                     kelly_exploring=False, dr_on=False, dr_ratio=0.0, dr_percentile=0.0,
+                     dist=dist)  # fmt: skip
 
 
 def close_event(trade_id=1, symbol=0, side=1, exit_=81_000.0):
@@ -331,3 +353,78 @@ class OrderIntentStub:
     client_id, symbol, side, quantity, ref_price, reduce_only = (
         "al1o", "BTCUSDT", "BUY", 0.01, 80_000.0, False,
     )  # fmt: skip
+
+
+def test_open_prepares_symbol_and_places_stop(store):
+    api = FakeApi()
+    ex = make(store, api)
+    queue(store, ex, [open_event(dist=0.01)])
+    run(ex.execute_pending())
+    assert api.prepared == [("BTCUSDT", "ISOLATED"), ("BTCUSDT", 5)]
+    assert api.stops == {"al1s": ("BTCUSDT", "SELL", pytest.approx(76_800.0))}
+
+
+def test_short_open_places_buy_stop_above_entry(store):
+    api = FakeApi()
+    ex = make(store, api)
+    queue(store, ex, [open_event(side=-1, dist=0.01)])
+    run(ex.execute_pending())
+    assert api.stops == {"al1s": ("BTCUSDT", "BUY", pytest.approx(83_200.0))}
+
+
+def test_no_stop_without_risk_distance(store):
+    api = FakeApi()
+    ex = make(store, api)
+    queue(store, ex, [open_event()])
+    run(ex.execute_pending())
+    assert api.stops == {} and len(store.positions()) == 1
+
+
+def test_close_cancels_stop(store):
+    api = FakeApi()
+    ex = make(store, api)
+    queue(store, ex, [open_event(dist=0.01)])
+    run(ex.execute_pending())
+    queue(store, ex, [close_event()])
+    run(ex.execute_pending())
+    assert api.stops == {}
+
+
+def test_stop_failure_does_not_halt_and_reconcile_replaces_it(store):
+    api = FakeApi()
+    ex = make(store, api)
+
+    async def broken(*_):
+        raise ApiError(-1000, "boom")
+
+    place = api.place_stop
+    api.place_stop = broken
+    queue(store, ex, [open_event(dist=0.01)])
+    run(ex.execute_pending())
+    assert len(store.positions()) == 1 and ex.halted() is None
+    assert any(r.kind == "StopHatası" for r in store.events().itertuples())
+    api.place_stop = place
+    api.positions_value = {"BTCUSDT": 0.01}
+    assert run(ex.reconcile()) == [] and "al1s" in api.stops
+
+
+def test_fired_stop_closes_system_position_without_halt(store):
+    api = FakeApi()
+    ex = make(store, api)
+    queue(store, ex, [open_event(dist=0.01)])
+    run(ex.execute_pending())
+    api.stops.clear()
+    api.stop_states["al1s"] = "TRIGGERED"
+    api.positions_value = {}
+    assert run(ex.reconcile()) == []
+    assert store.positions().empty and ex.halted() is None
+    assert any(r.kind == "StopTetiklendi" for r in store.events().itertuples())
+
+
+def test_flat_exchange_without_fired_stop_still_halts(store):
+    api = FakeApi()
+    ex = make(store, api)
+    queue(store, ex, [open_event(dist=0.01)])
+    run(ex.execute_pending())
+    api.positions_value = {}
+    assert run(ex.reconcile()) != [] and ex.halted() is not None

@@ -137,8 +137,14 @@ class Store:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         if self.conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise sqlite3.DatabaseError(f"{self.path}: bütünlük denetimi başarısız")
+
+    def _migrate(self) -> None:
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(outbox)")}
+        if "stop_price" not in columns:
+            self.conn.execute("ALTER TABLE outbox ADD COLUMN stop_price REAL NOT NULL DEFAULT 0")
 
     def _acquire_lock(self):
         import fcntl  # pylint: disable=import-outside-toplevel
@@ -246,10 +252,10 @@ class Store:
         for row in rows:
             self.conn.execute(
                 "INSERT OR IGNORE INTO outbox(trade_id, kind, base, symbol, side, quantity, "
-                "ref_price, client_id, reduce_only, reason, bar_time, state, error) "
+                "ref_price, client_id, reduce_only, reason, bar_time, state, error, stop_price) "
                 "VALUES (:trade_id, :kind, :base, :symbol, :side, :quantity, :ref_price, "
-                ":client_id, :reduce_only, :reason, :bar_time, :state, :error)",
-                {"reason": None, "error": None, "state": "pending", **row},
+                ":client_id, :reduce_only, :reason, :bar_time, :state, :error, :stop_price)",
+                {"reason": None, "error": None, "state": "pending", "stop_price": 0.0, **row},
             )
 
     def _write_events(self, events, symbols: list[str], times: dict[int, int]) -> None:

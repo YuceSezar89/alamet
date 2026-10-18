@@ -68,6 +68,7 @@ class OpenEvent(Event):
     dr_on: bool
     dr_ratio: float
     dr_percentile: float
+    dist: float = math.nan
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -249,3 +249,49 @@ def test_fills_give_the_real_average_price_from_the_trades():
                            {"commission": "0.1", "realizedPnl": "0", "price": "110", "qty": "3"}]))  # fmt: skip
     summary = run(api.fills("BTCUSDT", 5))
     assert summary["quantity"] == 4.0 and summary["avg_price"] == pytest.approx(107.5)
+
+
+def test_timestamp_error_resyncs_the_clock_and_retries_once():
+    api, wire = client(
+        (400, {"code": -1021, "msg": "Timestamp outside recvWindow"}),
+        (200, {"serverTime": 1_800_000_005_000}),
+        (200, {"ok": True}),
+    )
+    assert run(api.call("GET", "/fapi/v2/balance")) == {"ok": True}
+    assert [url.split("?")[0].rsplit("/", 1)[-1] for _, url, _ in wire.sent] == [
+        "balance",
+        "time",
+        "balance",
+    ]
+    assert api.offset_ms == 5000
+
+
+def test_timestamp_error_twice_is_raised():
+    err = (400, {"code": -1021, "msg": "x"})
+    api, _ = client(err, (200, {"serverTime": 1_800_000_000_000}), err)
+    with pytest.raises(ApiError):
+        run(api.call("GET", "/fapi/v2/balance"))
+
+
+def test_place_stop_sends_close_position_conditional_order():
+    api, wire = client((200, {"algoStatus": "NEW"}))
+    run(api.place_stop("BTCUSDT", "SELL", 76800.0, "al7s"))
+    method, url, _ = wire.sent[0]
+    fields = parse_qs(urlparse(url).query)
+    assert method == "POST" and urlparse(url).path == "/fapi/v1/algoOrder"
+    assert fields["algoType"] == ["CONDITIONAL"] and fields["type"] == ["STOP_MARKET"]
+    assert fields["closePosition"] == ["true"] and fields["workingType"] == ["MARK_PRICE"]
+    assert fields["triggerPrice"] == ["76800"] and fields["clientAlgoId"] == ["al7s"]
+
+
+def test_duplicate_stop_id_is_treated_as_already_placed():
+    api, _ = client((400, {"code": -4116, "msg": "ClientOrderId is duplicated."}))
+    assert run(api.place_stop("BTCUSDT", "SELL", 1.0, "al7s"))["algoStatus"] == "DUPLICATE"
+
+
+def test_cancel_and_status_of_unknown_stop_are_not_errors():
+    api, _ = client(
+        (400, {"code": -2011, "msg": "Unknown order"}), (400, {"code": -2013, "msg": "x"})
+    )
+    assert run(api.cancel_stop("al7s")) is False
+    assert run(api.stop_status("al7s")) is None
