@@ -232,3 +232,41 @@ def test_http_signal_tf(tmp_path):
     fields, bad, null = asyncio.run(go())
     assert set(fields["tfs"]) == {"900", "1800", "3600", "7200", "14400"}
     assert (bad, null) == (400, 400)
+
+
+def test_own_divergence_settings_are_exposed_with_defaults():
+    own = {r["code"]: r for r in whatif.fields() if r["code"].startswith("panel.own.")}
+    assert set(own) == {code for code, _ in whatif.OWN_FIELDS}
+    assert own["panel.own.own_n"]["default"] == 8 and own["panel.own.latch"]["default"] is True
+    assert own["panel.own.mult"]["group"] == whatif.OWN_GROUP
+
+
+def test_consistency_errors_use_screen_names_and_values():
+    with pytest.raises(whatif.InvalidSetting) as err:
+        whatif.check({"panel.divergence.max_div": 2})
+    text = str(err.value)
+    assert "Ayrışma geçmişi" in text and "min. önceki ayrışma sayısı" in text
+    assert "minPrev" not in text and "(2)" in text and "= 1" in text
+    with pytest.raises(whatif.InvalidSetting) as err:
+        whatif.check(
+            {
+                "panel.own_mode": "Ort + σ", "panel.own.own_n": 2,
+                "panel.divergence.min_prev": 3,
+            }  # fmt: skip
+        )
+    assert "Tutulan önceki hareket sayısı" in str(err.value)
+    assert whatif.check({}) is None
+
+
+def test_own_bounds_and_job_rejects_inconsistent_settings_before_queueing(tmp_path):
+    for bad in ({"panel.own.own_n": 1}, {"panel.own.own_n": 25}, {"panel.own.mult": 0.0}):
+        with pytest.raises(whatif.InvalidSetting):
+            whatif.to_sets(bad)
+
+    async def go():
+        jobs = whatif.Jobs(tmp_path)
+        with pytest.raises(whatif.InvalidSetting):
+            jobs.submit(asyncio.get_running_loop(), {"panel.divergence.max_div": 2}, "all", "ayar")
+        assert not jobs.jobs
+
+    asyncio.run(go())

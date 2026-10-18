@@ -11,6 +11,7 @@ Panel (sinyal hattı) pahalıdır; yalnızca panel ayarları değişince yeniden
 
 from __future__ import annotations
 
+import inspect
 import math
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from alamet.ayar_etiketleri import ETIKETLER, GRUPLAR
+from alamet.own_divergence import OwnDivergence
 from alamet.backtest import summarise
 from alamet.binance_data import DEFAULT_ROOT, infer_tf, load_universe_binance
 from alamet.daily import daily_from_bars, daily_pack, day_inputs, map_to_bars
@@ -28,6 +30,7 @@ from alamet.stages import stage_params
 from alamet.system import run_system
 from alamet.timeframe import SignalTf
 from alamet.universe import SYMBOLS, Universe, resample_universe
+from alamet.validate import validate_params
 from alamet.webviews import METHODS, SELECTOR_MODES, flatten
 
 BASE_STAGE = "S17"
@@ -50,6 +53,21 @@ BOOL_LABELS = {
     "trade.risk_mode": ("Sabit marj × kaldıraç", "Risk %"),
     "panel.shadow.risk_mode": ("Sabit marj × kaldıraç", "Risk %"),
     "trade.cap_risk_mode": ("Marj (notional / maks. kaldıraç)", "Risk (1R kaybı)"),
+}
+
+
+OWN_GROUP = "Kendi İçinde Ayrışma ★ (ÖNCE)"
+OWN_FIELDS = (
+    ("panel.own.mult", "Önceki hareketin kaç katı aşılmalı"),
+    ("panel.own.sigma", "Ort + σ modunda σ katsayısı"),
+    ("panel.own.own_n", "Tutulan önceki hareket sayısı (yönden bağımsız)"),
+    ("panel.own.latch", "Kendi içinde ayrışma bu sinyal boyunca korunur (zirve hareketi sayılır)"),
+    ("panel.own.allow_no_hist", "Önceki hareketi olmayan emtiayı geçir"),
+)  # `PanelParams.own` boş sözlüktür; varsayılanlar OwnDivergence imzasındadır.
+OWN_BOUNDS = {
+    "panel.own.own_n": (2, 20),
+    "panel.own.mult": (0.1, None),
+    "panel.own.sigma": (0.0, None),
 }
 
 
@@ -110,6 +128,13 @@ def fields() -> list[dict]:
                     rows.append(row)
             else:
                 rows.append(_field(path, value))
+    own_defaults = inspect.signature(OwnDivergence.__init__).parameters
+    own_order = _label("panel.own_mode")[2]
+    for i, (code, label) in enumerate(OWN_FIELDS):
+        value = own_defaults[code.rsplit(".", 1)[1]].default
+        row = _field(code, value)
+        row.update(group=OWN_GROUP, label=label, order=own_order + (i + 1) / 10)
+        rows.append(row)
     rank = {name: i for i, name in enumerate([*GRUPLAR, "Diğer"])}
     rows.sort(key=lambda r: (rank.get(r["group"], len(rank)), r["order"]))
     return rows
@@ -127,6 +152,11 @@ def to_sets(overrides: dict[str, object], cost: str = "ayar") -> list[str]:
         spec = known.get(code)
         if spec is None:
             raise InvalidSetting(f"bilinmeyen ayar: {code}")
+        low, high = OWN_BOUNDS.get(code, (None, None))
+        if low is not None and not isinstance(value, bool) and isinstance(value, (int, float)):
+            if value < low or (high is not None and value > high):
+                span = f"{low} – {high} aralığında" if high is not None else f"en az {low}"
+                raise InvalidSetting(f"“{spec['label']}” {span} olmalı (girilen: {value})")
         sets.append(f"{code}={_raw(spec, value)}")
     if cost == "gerçekçi":
         sets += list(REALISTIC)
@@ -158,6 +188,40 @@ def _raw(spec: dict, value) -> str:
             raise InvalidSetting(f"{spec['code']}: tam sayı olmalı")
         return repr(float(value)) if kind == "float" else str(int(value))
     return str(value)
+
+
+def _name(path: str) -> str:
+    own = dict(OWN_FIELDS)
+    return f"“{own[path] if path in own else _label(path)[1]}”"
+
+
+def check(overrides: dict[str, object], cost: str = "ayar", tf_seconds: int = BASE_SECONDS) -> None:
+    """Koşudan ÖNCE ayar tutarlılığını denetler; hata ekrandaki ayar adlarıyla ve değerleriyle yazılır."""
+    if tf_seconds not in TFS:
+        raise InvalidSetting(f"bilinmeyen sinyal TF'si: {tf_seconds}")
+    panel, trade = params_with(BASE_STAGE, to_sets(overrides, cost), tf_seconds)
+    try:
+        validate_params(panel, trade)
+    except ValueError as exc:
+        div = panel.divergence
+        text = str(exc)
+        if text.startswith("minPrev, maxDiv"):
+            text = (
+                f"{_name('panel.divergence.min_prev')} ({div.min_prev}), "
+                f"{_name('panel.divergence.max_div')} ({div.max_div}) − 1 = {div.max_div - 1} "
+                "değerinden büyük olamaz. İkisini tutarlı yapın."
+            )
+        elif text.startswith("Ort + σ"):
+            text = (
+                f"“Ort + σ” modunda {_name('panel.divergence.min_prev')} ({div.min_prev}), "
+                f"{_name('panel.own.own_n')} ({panel.own.get('own_n', 8)}) değerinden büyük olamaz."
+            )
+        elif text.startswith("Devisso"):
+            text = (
+                f"{_name('trade.dr_max_m')} ({trade.dr_max_m}), "
+                f"{_name('trade.dr_min_m')} ({trade.dr_min_m}) değerinden küçük olamaz."
+            )
+        raise InvalidSetting(text) from exc
 
 
 # ----------------------------------------------------------------------------- çalıştırma
@@ -306,7 +370,7 @@ class Jobs:
     ) -> dict:
         import uuid  # pylint: disable=import-outside-toplevel
 
-        to_sets(overrides, cost)  # doğrula: geçersizse InvalidSetting
+        check(overrides, cost, tf_seconds)  # doğrula: geçersizse InvalidSetting (kuyruğa girmeden)
         if window not in WINDOWS:
             raise InvalidSetting(f"bilinmeyen pencere: {window}")
         if tf_seconds not in TFS:
