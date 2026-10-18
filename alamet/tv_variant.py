@@ -204,6 +204,7 @@ VARIANTS["V6D"] = {
 VARIANTS["V7A"] = {"ssTf": "30", "maxExt": "6.0"}
 VARIANTS["V7B"] = {"ssTf": "60", "maxExt": "6.0"}
 VARIANTS["V7C"] = {"ssTf": "1", "maxExt": "6.0"}
+VARIANTS["V8A"] = {"vpTfOn": "false", "maxExt": "6.0"}
 VARIANTS["S30"] = {"ssTf": "30"}
 VARIANTS["S60"] = {"ssTf": "60"}
 VARIANTS["S1"] = {"ssTf": "1"}
@@ -272,7 +273,7 @@ def main() -> None:
     changes = VARIANTS[args.variant]
     args.out.write_text(apply(args.pine.read_text(encoding="utf-8"), changes), encoding="utf-8")
     print(f"yazıldı: {args.out}")
-    print("--set " + " ".join(set_args(changes, args.signal)))
+    print(" ".join(f"--set {item}" for item in set_args(changes, args.signal)))
 
 
 if __name__ == "__main__":
