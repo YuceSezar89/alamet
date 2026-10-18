@@ -4,6 +4,12 @@ Devis'So DEPV2 sinyal ve kasa sisteminin (TradingView Pine) birebir Python portu
 kurulan Binance Futures (USDT-M) botu. Eski TRader Panel projesinden bağımsızdır.
 
 > **Not:** Bu bot, İsmail Selçuk Deveci'nin Pine kodundan Yusuf Türk tarafından Python'a çevrilmiştir.
+> Kod, Pine kodunun sahibinin izniyle paylaşılmıştır.
+
+## Lisans ve uyarı
+MIT lisansı ([LICENSE](LICENSE)): kopyalayabilir, değiştirebilir ve kullanabilirsiniz. Bu bir yatırım
+tavsiyesi değildir; sistem kâr garantisi vermez, gerçek parayla kullanım tamamen sizin
+sorumluluğunuzdadır.
 
 ## Durum
 - Pine mantığı Python'a taşındı ve TradingView ile satır satır doğrulandı (basamak S0–S50).
