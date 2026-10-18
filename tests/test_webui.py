@@ -68,3 +68,22 @@ def test_mode_of_reads_flags():
     mode = mode_of("python -m alamet.runner --trade demo --only BTC --max-total 5000")
     assert mode["trade"] == "demo" and mode["only"] == "BTC" and mode["max_total"] == "5000"
     assert mode_of("python -m alamet.runner")["trade"] == "off"
+
+
+def test_new_views_are_empty_but_valid_on_an_empty_database(tmp_path):
+    db = tmp_path / "t.sqlite"
+    Store(db).close()
+
+    async def go():
+        app = make_app(db, universe(tmp_path), tmp_path / "HALT", tmp_path)
+        async with TestClient(TestServer(app)) as client:
+            out = {}
+            for name in ("tables", "symbols", "settings", "charts"):
+                response = await client.get(f"/api/{name}")
+                out[name] = (response.status, await response.json())
+            return out
+
+    out = asyncio.run(go())
+    assert all(status == 200 for status, _ in out.values())
+    assert out["tables"][1] == {} and out["charts"][1] == {}
+    assert out["symbols"][1] == [] and out["settings"][1] == []

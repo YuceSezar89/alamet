@@ -18,7 +18,11 @@ import time
 import zlib
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 from aiohttp import web
+
+from alamet import webviews
 
 STALE_SECONDS = 20 * 60
 CLOSE_REASONS = {
@@ -105,29 +109,34 @@ def clean(value):
     return value
 
 
+def last_closes(root: Path, names: list[str], bar_time: int | None) -> np.ndarray:
+    """Her sembolün, sistemin son işlediği bardaki kapanışı (önbellek dosyalarından)."""
+    out = np.full(len(names), math.nan)
+    for k, base in enumerate(names):
+        path = root / f"{base}USDT.parquet"
+        if not path.exists():
+            continue
+        try:
+            frame = pd.read_parquet(path, columns=["open_time", "close"])
+        except (OSError, ValueError):
+            continue
+        if frame.empty:
+            continue
+        if bar_time is not None:
+            match = frame[frame["open_time"] == bar_time * 1000]
+            frame = match if not match.empty else frame
+        out[k] = float(frame["close"].iloc[-1])
+    return out
+
+
 def candidates(system, names: list[str]) -> list[dict]:
     tracker = system.tracker
-    p = tracker.p
     out = []
     for k in range(tracker.n):
         if not tracker.active[k]:
             continue
-        n, md = int(tracker.count[k]), p.max_div
-        sign = -1 if tracker.dir[k] == -1 else 1
-        current = tracker.res_mv[k, (n - 1) % md] * sign
-        previous = [
-            tracker.res_mv[k, (j - 1) % md] * sign
-            for j in range(max(1, n - md + 1), n)
-            if not math.isnan(tracker.res_mv[k, (j - 1) % md])
-        ]
-        threshold = None
-        if len(previous) >= p.min_prev:
-            mean = sum(previous) / len(previous)
-            var = sum(v * v for v in previous) / len(previous) - mean * mean
-            std = math.sqrt(max(var, 0.0)) if len(previous) > 1 else 0.0
-            threshold = mean + p.z_min * std
-        lock = tracker.lock(k)
-        double, side = tracker.last_double(k), int(tracker.dir[k])
+        leg = webviews.leg_stats(tracker, k)
+        side, double, lock = leg["side"], leg["double"], leg["lock"]
         blockers = []
         if not double:
             blockers.append("çift ayrışma yok")
@@ -137,9 +146,9 @@ def candidates(system, names: list[str]) -> list[dict]:
             {
                 "symbol": names[k],
                 "side": side,
-                "number": n,
-                "current": clean(float(current)),
-                "threshold": clean(threshold),
+                "number": leg["number"],
+                "current": clean(leg["current"]),
+                "threshold": clean(leg["threshold"]),
                 "double": double,
                 "lock": int(lock),
                 "ready": not blockers,
@@ -216,9 +225,111 @@ def snapshot_payload(conn, cache: Snapshot, names, halt_file: Path) -> dict:
     }
 
 
-def make_app(db_path: Path, universe_path: Path, halt_file: Path) -> web.Application:
+def make_app(  # pylint: disable=too-many-locals
+    db_path: Path, universe_path: Path, halt_file: Path, data_root: Path | None = None
+) -> web.Application:
     names = [s["base"] for s in json.loads(universe_path.read_text(encoding="utf-8"))["symbols"]]
     cache = Snapshot()
+    computed: dict[tuple[str, int | None], object] = {}
+
+    def memo(kind: str, build, empty):
+        """Yalnızca yeni bar gelince yeniden hesaplanır (pahalı tablolar)."""
+        conn = connect(db_path)
+        try:
+            bar_time, system = cache.load(conn)
+            key = (kind, bar_time)
+            if key not in computed:
+                for old in [k for k in computed if k[1] != bar_time or k[0] == kind]:
+                    del computed[old]
+                computed[key] = build(conn, bar_time, system) if system is not None else empty
+            return computed[key]
+        finally:
+            conn.close()
+
+    def closes(bar_time):
+        root = data_root or Path("data/binance_15m")
+        return last_closes(root, names, bar_time)
+
+    def build_tables(_conn, bar_time, system):
+        return webviews.hoca_tables(system, names, closes(bar_time))
+
+    def build_symbols(_conn, bar_time, system):
+        return webviews.symbols_table(system, names, closes(bar_time))
+
+    def build_settings(_conn, _bar_time, system):
+        return webviews.settings_table(system)
+
+    def build_charts(conn, _bar_time, system):
+        trade_rows = rows(
+            conn, "SELECT trade_id, close_time, usd, r, reason FROM trades ORDER BY trade_id"
+        )
+        return webviews.charts(trade_rows, float(system.tp.start_cap), CLOSE_REASONS)
+
+    def price_series(base: str, bar_time, days: int = 7) -> list[dict]:
+        path = (data_root or Path("data/binance_15m")) / f"{base}USDT.parquet"
+        if not path.exists():
+            return []
+        frame = pd.read_parquet(path, columns=["open_time", "close"]).tail(96 * days)
+        if bar_time is not None:
+            frame = frame[frame["open_time"] <= bar_time * 1000]
+        return [
+            {"t": int(t // 1000), "c": float(c)} for t, c in zip(frame["open_time"], frame["close"])
+        ]
+
+    def divergence_series(conn, base: str, bar_time):
+        price = price_series(base, bar_time)
+        start = price[0]["t"] if price else 0
+        events = []
+        for r in rows(
+            conn,
+            "SELECT bar_time, kind, payload FROM events WHERE symbol = ? AND bar_time >= ? "
+            "AND kind IN ('DivergenceEvent', 'DoubleDivergenceEvent') ORDER BY bar_time",
+            (base, start),
+        ):
+            data = json.loads(r["payload"])
+            events.append(
+                {
+                    "t": r["bar_time"], "double": r["kind"] == "DoubleDivergenceEvent",
+                    "dir": data.get("direction"), "no": data.get("number"), "move": data.get("move"),
+                }
+            )  # fmt: skip
+        trades = rows(
+            conn,
+            "SELECT side, open_time, close_time, entry, exit, r FROM trades "
+            "WHERE symbol = ? AND close_time >= ? ORDER BY trade_id",
+            (base, start),
+        )
+        return {"price": price, "events": events, "trades": trades}
+
+    async def divergence_overview(_request: web.Request) -> web.Response:
+        payload = memo(
+            "div-overview", lambda _c, _t, system: webviews.divergence_overview(system, names), []
+        )
+        return web.Response(text=json.dumps(payload, default=str), content_type="application/json")
+
+    async def divergence_symbol(request: web.Request) -> web.Response:
+        base = request.query.get("symbol", "")
+        if base not in names:
+            return web.Response(
+                text=json.dumps({"error": "bilinmeyen sembol"}),
+                content_type="application/json", status=404,
+            )  # fmt: skip
+
+        def build(conn, bar_time, system):
+            series = divergence_series(conn, base, bar_time)
+            return webviews.divergence_detail(system, names, names.index(base), series)
+
+        payload = memo("div:" + base, build, {})
+        return web.Response(text=json.dumps(payload, default=str), content_type="application/json")
+
+    def json_view(kind: str, build, empty):
+        async def handler(_request: web.Request) -> web.Response:
+            payload = memo(kind, build, empty)
+            return web.Response(
+                text=json.dumps(payload, default=str), content_type="application/json"
+            )
+
+        return handler
 
     async def api(_request: web.Request) -> web.Response:
         conn = connect(db_path)
@@ -233,7 +344,18 @@ def make_app(db_path: Path, universe_path: Path, halt_file: Path) -> web.Applica
         return web.Response(text=page, content_type="text/html")
 
     app = web.Application()
-    app.add_routes([web.get("/", index), web.get("/api/all", api)])
+    app.add_routes(
+        [
+            web.get("/", index),
+            web.get("/api/all", api),
+            web.get("/api/tables", json_view("tables", build_tables, {})),
+            web.get("/api/symbols", json_view("symbols", build_symbols, [])),
+            web.get("/api/settings", json_view("settings", build_settings, [])),
+            web.get("/api/charts", json_view("charts", build_charts, {})),
+            web.get("/api/divergence/overview", divergence_overview),
+            web.get("/api/divergence", divergence_symbol),
+        ]
+    )
     return app
 
 
@@ -242,9 +364,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="data/alamet.sqlite")
     parser.add_argument("--universe", default="data/universe.json")
     parser.add_argument("--halt-file", default="data/HALT")
+    parser.add_argument(
+        "--data-root", default="data/binance_15m", help="son fiyatlar için mum önbelleği"
+    )
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
-    app = make_app(Path(args.db), Path(args.universe), Path(args.halt_file))
+    app = make_app(Path(args.db), Path(args.universe), Path(args.halt_file), Path(args.data_root))
     web.run_app(app, host="127.0.0.1", port=args.port, print=lambda *_: None)
     return 0
 
